@@ -1,0 +1,17 @@
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Province {
+  id   String @id @default(uuid(7)) @db.Uuid
+  name String
+
+  @@map("province")
+}

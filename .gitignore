@@ -6,6 +6,9 @@
 .idea
 .omc
 
+# Prisma generated client
+/src/generated/prisma
+
 # TypeScript build cache
 *.tsbuildinfo
 
