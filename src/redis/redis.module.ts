@@ -6,9 +6,11 @@ import {
   OnApplicationShutdown,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { TerminusModule } from '@nestjs/terminus';
 import { Redis } from 'ioredis';
 import { CacheService } from './cache.service.js';
 import { REDIS_CLIENT } from './redis.constants.js';
+import { RedisHealthIndicator } from './redis.health.js';
 
 const CONNECT_TIMEOUT_MS = 5_000;
 
@@ -29,6 +31,7 @@ function waitForReady(client: Redis, timeoutMs: number): Promise<boolean> {
 
 @Global()
 @Module({
+  imports: [TerminusModule],
   providers: [
     {
       provide: REDIS_CLIENT,
@@ -56,8 +59,9 @@ function waitForReady(client: Redis, timeoutMs: number): Promise<boolean> {
       },
     },
     CacheService,
+    RedisHealthIndicator,
   ],
-  exports: [CacheService],
+  exports: [CacheService, RedisHealthIndicator],
 })
 export class RedisModule implements OnApplicationShutdown {
   constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
