@@ -15,3 +15,17 @@ model Province {
 
   @@map("province")
 }
+
+model User {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  firstName String   @map("first_name")
+  lastName  String   @map("last_name")
+  /// Stored lowercased, so uniqueness is case-insensitive.
+  email     String   @unique
+  /// E.164 format, e.g. +243812345678.
+  phone     String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("users")
+}
