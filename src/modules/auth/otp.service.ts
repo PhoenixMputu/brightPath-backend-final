@@ -7,9 +7,17 @@ import { PasswordService } from './password.service.js';
 
 export const OTP_LENGTH = 6;
 export const OTP_TTL_SECONDS = 10 * 60;
+/** Wrong guesses allowed per code before it is burnt. */
+export const OTP_MAX_ATTEMPTS = 5;
+
+export type OtpCheck = 'valid' | 'invalid' | 'expired' | 'too_many_attempts';
 
 export function otpKey(userId: string): string {
   return redisKey('auth', 'otp', userId);
+}
+
+export function otpAttemptsKey(userId: string): string {
+  return redisKey('auth', 'otp-attempts', userId);
 }
 
 /**
@@ -27,12 +35,45 @@ export class OtpService {
   async issue(userId: string): Promise<string> {
     const code = generateCode();
     const hash = await this.passwordService.hash(code);
-    await this.redis.set(otpKey(userId), hash, 'EX', OTP_TTL_SECONDS);
+    await this.redis
+      .multi()
+      .set(otpKey(userId), hash, 'EX', OTP_TTL_SECONDS)
+      .del(otpAttemptsKey(userId))
+      .exec();
     return code;
   }
 
+  /**
+   * Checks `code` against the stored hash. A valid code is consumed. Every
+   * check counts as an attempt (counted atomically, so parallel guesses cannot
+   * exceed the limit); past OTP_MAX_ATTEMPTS the code is deleted and a new one
+   * must be issued.
+   */
+  async verify(userId: string, code: string): Promise<OtpCheck> {
+    const hash = await this.redis.get(otpKey(userId));
+    if (hash === null) return 'expired';
+
+    const attemptsKey = otpAttemptsKey(userId);
+    const results = await this.redis
+      .multi()
+      .incr(attemptsKey)
+      // Set only on the first attempt, so the window is not extended.
+      .expire(attemptsKey, OTP_TTL_SECONDS, 'NX')
+      .exec();
+    const attempts = Number(results?.[0]?.[1]);
+    if (!Number.isFinite(attempts) || attempts > OTP_MAX_ATTEMPTS) {
+      await this.revoke(userId);
+      return 'too_many_attempts';
+    }
+
+    if (!(await this.passwordService.verify(hash, code))) return 'invalid';
+
+    await this.revoke(userId);
+    return 'valid';
+  }
+
   async revoke(userId: string): Promise<void> {
-    await this.redis.del(otpKey(userId));
+    await this.redis.del(otpKey(userId), otpAttemptsKey(userId));
   }
 }
 
