@@ -7,12 +7,13 @@ describe('UsersService', () => {
   const prisma = { user: { create: vi.fn(), findFirst: vi.fn() } };
   let service: UsersService;
 
-  const input = {
+  const profile = {
     firstName: 'Victory',
     lastName: 'Deo',
     email: 'victory.deo@example.com',
     phone: '+243812345678',
   };
+  const input = { ...profile, passwordHash: '$argon2id$hash' };
 
   const uniqueViolation = () =>
     new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
@@ -32,15 +33,15 @@ describe('UsersService', () => {
     service = new UsersService(prisma as unknown as PrismaService);
   });
 
-  it('creates the user and returns only the public fields', async () => {
+  it('creates the user and never returns the password hash', async () => {
     const createdAt = new Date('2026-11-13T15:00:00Z');
+    // Even if the client returned the hash, it must not reach the DTO.
     prisma.user.create.mockResolvedValue({ id: 'u-1', ...input, createdAt });
 
-    await expect(service.create(input)).resolves.toEqual({
-      id: 'u-1',
-      ...input,
-      createdAt,
-    });
+    const user = await service.create(input);
+
+    expect(user).toEqual({ id: 'u-1', ...profile, createdAt });
+    expect(user).not.toHaveProperty('passwordHash');
     expect(prisma.user.create).toHaveBeenCalledWith({
       data: input,
       select: {

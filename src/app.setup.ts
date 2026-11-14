@@ -1,4 +1,6 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { HttpAdapterHost } from '@nestjs/core';
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
 
 /** HTTP-level configuration shared by main.ts and the tests. */
 export function configureApp(app: INestApplication) {
@@ -11,5 +13,6 @@ export function configureApp(app: INestApplication) {
       transform: true,
     }),
   );
+  app.useGlobalFilters(new AllExceptionsFilter(app.get(HttpAdapterHost)));
   return app;
 }
