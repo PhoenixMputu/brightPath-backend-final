@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   INestApplication,
   ServiceUnavailableException,
@@ -6,12 +7,16 @@ import {
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { configureApp } from '../../app.setup.js';
-import { AuthController, REGISTER_SUCCESS_MESSAGE } from './auth.controller.js';
+import {
+  AuthController,
+  REGISTER_SUCCESS_MESSAGE,
+  VERIFY_EMAIL_SUCCESS_MESSAGE,
+} from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 
 describe('AuthController', () => {
   let app: INestApplication;
-  const authService = { register: vi.fn() };
+  const authService = { register: vi.fn(), verifyEmail: vi.fn() };
 
   const profile = {
     firstName: 'Victory',
@@ -117,5 +122,58 @@ describe('AuthController', () => {
     );
 
     await register(valid).expect(503).expect(body);
+  });
+
+  describe('POST /auth/verify-email', () => {
+    const verify = (body: object) =>
+      request(app.getHttpServer()).post('/api/v1/auth/verify-email').send(body);
+    const validBody = { email: profile.email, code: '042137' };
+
+    it('verifies the email and answers 200 with the active user', async () => {
+      const user = {
+        id: '019a7d2e-4b1c-7a3f-9e2d-1c5b8a6f4e3d',
+        ...profile,
+        status: 'ACTIVE',
+        createdAt: '2026-11-13T15:00:00.000Z',
+      };
+      authService.verifyEmail.mockResolvedValue(user);
+
+      await verify(validBody)
+        .expect(200)
+        .expect({ message: VERIFY_EMAIL_SUCCESS_MESSAGE, data: user });
+    });
+
+    it('normalizes the email', async () => {
+      authService.verifyEmail.mockResolvedValue({});
+
+      await verify({ ...validBody, email: ' Victory.DEO@Example.com ' }).expect(
+        200,
+      );
+      expect(authService.verifyEmail).toHaveBeenCalledWith(validBody);
+    });
+
+    it.each([
+      ['missing code', { email: profile.email }],
+      ['code too short', { ...validBody, code: '12345' }],
+      ['code too long', { ...validBody, code: '1234567' }],
+      ['code with letters', { ...validBody, code: '12a456' }],
+      ['numeric code', { ...validBody, code: 42137 }],
+      ['invalid email', { ...validBody, email: 'nope' }],
+      ['unknown field', { ...validBody, userId: 'u-1' }],
+    ])('rejects %s with 400', async (_label, body) => {
+      await verify(body).expect(400);
+      expect(authService.verifyEmail).not.toHaveBeenCalled();
+    });
+
+    it('returns the error body produced by the service', async () => {
+      const body = {
+        statusCode: 400,
+        code: 'OTP_INVALID',
+        message: 'Verification code is invalid',
+      };
+      authService.verifyEmail.mockRejectedValue(new BadRequestException(body));
+
+      await verify(validBody).expect(400).expect(body);
+    });
   });
 });

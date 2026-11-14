@@ -1,4 +1,10 @@
-import { Logger, ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  HttpException,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import {
   EmailDeliveryError,
   EmailService,
@@ -9,9 +15,14 @@ import { OtpService } from './otp.service.js';
 import { PasswordService } from './password.service.js';
 
 describe('AuthService', () => {
-  const usersService = { create: vi.fn(), delete: vi.fn() };
+  const usersService = {
+    create: vi.fn(),
+    delete: vi.fn(),
+    findByEmail: vi.fn(),
+    activate: vi.fn(),
+  };
   const passwordService = { hash: vi.fn(), verify: vi.fn() };
-  const otpService = { issue: vi.fn(), revoke: vi.fn() };
+  const otpService = { issue: vi.fn(), revoke: vi.fn(), verify: vi.fn() };
   const emailService = { send: vi.fn() };
   const service = new AuthService(
     usersService as unknown as UsersService,
@@ -124,5 +135,93 @@ describe('AuthService', () => {
 
     await unavailable();
     expect(Logger.prototype.error).toHaveBeenCalled();
+  });
+
+  describe('verifyEmail', () => {
+    const input = { email: profile.email, code: '042137' };
+
+    const errorOf = async () => {
+      const err = await service.verifyEmail(input).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(HttpException);
+      return {
+        status: (err as HttpException).getStatus(),
+        body: (err as HttpException).getResponse(),
+      };
+    };
+
+    beforeEach(() => usersService.findByEmail.mockResolvedValue(user));
+
+    it('activates the user when the code is valid', async () => {
+      const active = { ...user, status: 'ACTIVE' };
+      otpService.verify.mockResolvedValue('valid');
+      usersService.activate.mockResolvedValue(active);
+
+      await expect(service.verifyEmail(input)).resolves.toBe(active);
+      expect(usersService.findByEmail).toHaveBeenCalledWith(profile.email);
+      expect(otpService.verify).toHaveBeenCalledWith('u-1', '042137');
+      expect(usersService.activate).toHaveBeenCalledWith('u-1');
+    });
+
+    it('answers an unknown email exactly like a wrong code', async () => {
+      usersService.findByEmail.mockResolvedValue(null);
+      const unknown = await errorOf();
+
+      usersService.findByEmail.mockResolvedValue(user);
+      otpService.verify.mockResolvedValue('invalid');
+      const wrong = await errorOf();
+
+      expect(unknown).toEqual(wrong);
+      expect(wrong).toEqual({
+        status: 400,
+        body: {
+          statusCode: 400,
+          code: 'OTP_INVALID',
+          message: 'Verification code is invalid',
+        },
+      });
+      expect(usersService.activate).not.toHaveBeenCalled();
+    });
+
+    it('refuses an already verified user without touching the code', async () => {
+      usersService.findByEmail.mockResolvedValue({ ...user, status: 'ACTIVE' });
+
+      const err = await service.verifyEmail(input).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).getResponse()).toMatchObject({
+        code: 'EMAIL_ALREADY_VERIFIED',
+      });
+      expect(otpService.verify).not.toHaveBeenCalled();
+    });
+
+    it('reports an expired code', async () => {
+      otpService.verify.mockResolvedValue('expired');
+
+      const { status, body } = await errorOf();
+      expect(status).toBe(400);
+      expect(body).toMatchObject({ code: 'OTP_EXPIRED' });
+    });
+
+    it('answers 429 after too many attempts', async () => {
+      otpService.verify.mockResolvedValue('too_many_attempts');
+
+      await expect(errorOf()).resolves.toEqual({
+        status: 429,
+        body: {
+          statusCode: 429,
+          code: 'OTP_TOO_MANY_ATTEMPTS',
+          message: 'Too many attempts, request a new code',
+        },
+      });
+      expect(usersService.activate).not.toHaveBeenCalled();
+    });
+
+    it('does not mistake other errors for a bad code', async () => {
+      const failure = new Error('ECONNREFUSED');
+      otpService.verify.mockRejectedValue(failure);
+
+      const err = await service.verifyEmail(input).catch((e: unknown) => e);
+      expect(err).not.toBeInstanceOf(BadRequestException);
+      expect(err).toBe(failure);
+    });
   });
 });
