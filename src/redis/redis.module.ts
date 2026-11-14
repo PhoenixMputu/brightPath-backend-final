@@ -61,7 +61,9 @@ function waitForReady(client: Redis, timeoutMs: number): Promise<boolean> {
     CacheService,
     RedisHealthIndicator,
   ],
-  exports: [CacheService, RedisHealthIndicator],
+  // REDIS_CLIENT is shared for short-lived data (OTPs) that must not go
+  // through the cache's database fallback.
+  exports: [REDIS_CLIENT, CacheService, RedisHealthIndicator],
 })
 export class RedisModule implements OnApplicationShutdown {
   constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}

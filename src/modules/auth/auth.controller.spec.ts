@@ -1,8 +1,12 @@
-import { ConflictException, INestApplication } from '@nestjs/common';
+import {
+  ConflictException,
+  INestApplication,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { configureApp } from '../../app.setup.js';
-import { AuthController } from './auth.controller.js';
+import { AuthController, REGISTER_SUCCESS_MESSAGE } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 
 describe('AuthController', () => {
@@ -32,17 +36,18 @@ describe('AuthController', () => {
   const register = (body: object) =>
     request(app.getHttpServer()).post('/api/v1/auth/register').send(body);
 
-  it('registers a user and returns it with a message', async () => {
+  it('registers an inactive user and returns it with a message', async () => {
     const user = {
       id: '019a7d2e-4b1c-7a3f-9e2d-1c5b8a6f4e3d',
       ...profile,
+      status: 'INACTIVE',
       createdAt: '2026-11-13T15:00:00.000Z',
     };
     authService.register.mockResolvedValue(user);
 
     await register(valid)
       .expect(201)
-      .expect({ message: 'User registered successfully.', data: user });
+      .expect({ message: REGISTER_SUCCESS_MESSAGE, data: user });
   });
 
   it('normalizes the email, the names and the phone before registering', async () => {
@@ -99,5 +104,18 @@ describe('AuthController', () => {
     authService.register.mockRejectedValue(new ConflictException(body));
 
     await register(valid).expect(409).expect(body);
+  });
+
+  it('returns 503 when the verification email cannot be sent', async () => {
+    const body = {
+      statusCode: 503,
+      code: 'VERIFICATION_EMAIL_NOT_SENT',
+      message: 'Verification email could not be sent, please try again',
+    };
+    authService.register.mockRejectedValue(
+      new ServiceUnavailableException(body),
+    );
+
+    await register(valid).expect(503).expect(body);
   });
 });

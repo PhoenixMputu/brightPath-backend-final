@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { UserStatus } from '../../../generated/prisma/enums.js';
 
 export class UserDto {
   @ApiProperty({
@@ -18,6 +19,14 @@ export class UserDto {
 
   @ApiProperty({ example: '+243812345678' })
   phone: string;
+
+  @ApiProperty({
+    enum: UserStatus,
+    enumName: 'UserStatus',
+    example: UserStatus.INACTIVE,
+    description: 'INACTIVE until the email is verified.',
+  })
+  status: UserStatus;
 
   @ApiProperty({ example: '2026-11-13T15:16:47.000Z' })
   createdAt: Date;
