@@ -7,11 +7,13 @@ import {
   Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { UserStatus } from '../../generated/prisma/enums.js';
 import { EmailService } from '../../integrations/resend/email.service.js';
 import { UserDto } from '../users/dto/user.dto.js';
 import { UsersService } from '../users/users.service.js';
 import { RegisterDto } from './dto/register.dto.js';
+import { ResendVerificationCodeDto } from './dto/resend-verification-code.dto.js';
 import { VerifyEmailDto } from './dto/verify-email.dto.js';
 import { OtpService } from './otp.service.js';
 import { PasswordService } from './password.service.js';
@@ -45,23 +47,48 @@ export class AuthService {
     });
 
     try {
-      const code = await this.otpService.issue(user.id);
-      await this.emailService.send({
-        to: user.email,
-        ...verificationEmail(user.firstName, code),
-        idempotencyKey: `registration-otp/${user.id}`,
-      });
+      await this.sendCode(user, `registration-otp/${user.id}`);
     } catch (err) {
       await this.rollBack(user.id, err);
-      throw new ServiceUnavailableException({
-        statusCode: 503,
-        code: 'VERIFICATION_EMAIL_NOT_SENT',
-        message: 'Verification email could not be sent, please try again',
-      });
+      throw emailNotSent();
+    }
+    return user;
+  }
+
+  /**
+   * Sends a new code, replacing the previous one, at most once per cooldown.
+   *
+   * Unknown and already verified emails get the same silent success as a real
+   * send, so the endpoint does not reveal which accounts exist.
+   */
+  async resendVerificationCode(dto: ResendVerificationCodeDto): Promise<void> {
+    const user = await this.usersService.findByEmail(dto.email);
+    if (!user || user.status !== UserStatus.INACTIVE) return;
+
+    if (!(await this.otpService.tryStartCooldown(user.id))) {
+      throw new HttpException(
+        {
+          statusCode: 429,
+          code: 'OTP_RESEND_TOO_SOON',
+          message: 'A code was sent recently, please wait before asking again',
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
     }
 
-    this.logger.log(`Verification code sent: ${user.id}`);
-    return user;
+    try {
+      // Each resend is a distinct email: reusing a key with a new code would
+      // make Resend answer 409.
+      await this.sendCode(user, `resend-otp/${user.id}/${randomUUID()}`);
+    } catch (err) {
+      const reason = err instanceof Error ? err.name : 'unknown';
+      this.logger.warn(
+        `Verification code resend failed (${reason}): ${user.id}`,
+      );
+      // The previous code may already be replaced: let the user retry now.
+      await this.otpService.clearCooldown(user.id).catch(() => undefined);
+      throw emailNotSent();
+    }
   }
 
   /**
@@ -103,6 +130,16 @@ export class AuthService {
     }
   }
 
+  private async sendCode(user: UserDto, idempotencyKey: string): Promise<void> {
+    const code = await this.otpService.issue(user.id);
+    await this.emailService.send({
+      to: user.email,
+      ...verificationEmail(user.firstName, code),
+      idempotencyKey,
+    });
+    this.logger.log(`Verification code sent: ${user.id}`);
+  }
+
   private async rollBack(userId: string, cause: unknown): Promise<void> {
     const reason = cause instanceof Error ? cause.name : 'unknown';
     this.logger.warn(`Registration rolled back (${reason}): ${userId}`);
@@ -120,5 +157,13 @@ function invalidCode(): BadRequestException {
     statusCode: 400,
     code: 'OTP_INVALID',
     message: 'Verification code is invalid',
+  });
+}
+
+function emailNotSent(): ServiceUnavailableException {
+  return new ServiceUnavailableException({
+    statusCode: 503,
+    code: 'VERIFICATION_EMAIL_NOT_SENT',
+    message: 'Verification email could not be sent, please try again',
   });
 }

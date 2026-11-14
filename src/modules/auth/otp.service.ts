@@ -9,6 +9,8 @@ export const OTP_LENGTH = 6;
 export const OTP_TTL_SECONDS = 10 * 60;
 /** Wrong guesses allowed per code before it is burnt. */
 export const OTP_MAX_ATTEMPTS = 5;
+/** Minimum delay between two codes sent to the same user. */
+export const OTP_RESEND_COOLDOWN_SECONDS = 60;
 
 export type OtpCheck = 'valid' | 'invalid' | 'expired' | 'too_many_attempts';
 
@@ -18,6 +20,10 @@ export function otpKey(userId: string): string {
 
 export function otpAttemptsKey(userId: string): string {
   return redisKey('auth', 'otp-attempts', userId);
+}
+
+export function otpCooldownKey(userId: string): string {
+  return redisKey('auth', 'otp-cooldown', userId);
 }
 
 /**
@@ -31,7 +37,10 @@ export class OtpService {
     private readonly passwordService: PasswordService,
   ) {}
 
-  /** Returns the plain code, to be sent to the user and never stored. */
+  /**
+   * Returns the plain code, to be sent to the user and never stored. Also
+   * starts the resend cooldown.
+   */
   async issue(userId: string): Promise<string> {
     const code = generateCode();
     const hash = await this.passwordService.hash(code);
@@ -39,8 +48,29 @@ export class OtpService {
       .multi()
       .set(otpKey(userId), hash, 'EX', OTP_TTL_SECONDS)
       .del(otpAttemptsKey(userId))
+      .set(otpCooldownKey(userId), '1', 'EX', OTP_RESEND_COOLDOWN_SECONDS)
       .exec();
     return code;
+  }
+
+  /**
+   * Claims the right to send a new code. False while the cooldown of the
+   * previous code runs; SET NX makes parallel requests claim it only once.
+   */
+  async tryStartCooldown(userId: string): Promise<boolean> {
+    const result = await this.redis.set(
+      otpCooldownKey(userId),
+      '1',
+      'EX',
+      OTP_RESEND_COOLDOWN_SECONDS,
+      'NX',
+    );
+    return result === 'OK';
+  }
+
+  /** Lets the user ask again at once, e.g. after a failed send. */
+  async clearCooldown(userId: string): Promise<void> {
+    await this.redis.del(otpCooldownKey(userId));
   }
 
   /**

@@ -1,6 +1,7 @@
 import { Redis } from 'ioredis';
 import {
   OTP_MAX_ATTEMPTS,
+  OTP_RESEND_COOLDOWN_SECONDS,
   OTP_TTL_SECONDS,
   OtpService,
 } from './otp.service.js';
@@ -14,12 +15,13 @@ describe('OtpService', () => {
     expire: vi.fn(),
     exec: vi.fn(),
   };
-  const redis = { get: vi.fn(), del: vi.fn(), multi: vi.fn() };
+  const redis = { get: vi.fn(), set: vi.fn(), del: vi.fn(), multi: vi.fn() };
   const passwordService = new PasswordService();
   const service = new OtpService(redis as unknown as Redis, passwordService);
 
   const KEY = 'brightpath:auth:otp:u-1';
   const ATTEMPTS_KEY = 'brightpath:auth:otp-attempts:u-1';
+  const COOLDOWN_KEY = 'brightpath:auth:otp-cooldown:u-1';
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -48,6 +50,12 @@ describe('OtpService', () => {
         OTP_TTL_SECONDS,
       );
       expect(tx.del).toHaveBeenCalledWith(ATTEMPTS_KEY);
+      expect(tx.set).toHaveBeenCalledWith(
+        COOLDOWN_KEY,
+        '1',
+        'EX',
+        OTP_RESEND_COOLDOWN_SECONDS,
+      );
       const stored = tx.set.mock.calls[0][1] as string;
       expect(stored).not.toContain(code);
       await expect(passwordService.verify(stored, code)).resolves.toBe(true);
@@ -134,5 +142,30 @@ describe('OtpService', () => {
   it('revokes a code and its attempts', async () => {
     await service.revoke('u-1');
     expect(redis.del).toHaveBeenCalledWith(KEY, ATTEMPTS_KEY);
+  });
+
+  describe('resend cooldown', () => {
+    it('is claimed atomically with SET NX and a TTL', async () => {
+      redis.set.mockResolvedValue('OK');
+
+      await expect(service.tryStartCooldown('u-1')).resolves.toBe(true);
+      expect(redis.set).toHaveBeenCalledWith(
+        COOLDOWN_KEY,
+        '1',
+        'EX',
+        OTP_RESEND_COOLDOWN_SECONDS,
+        'NX',
+      );
+    });
+
+    it('cannot be claimed while it runs', async () => {
+      redis.set.mockResolvedValue(null);
+      await expect(service.tryStartCooldown('u-1')).resolves.toBe(false);
+    });
+
+    it('can be cleared', async () => {
+      await service.clearCooldown('u-1');
+      expect(redis.del).toHaveBeenCalledWith(COOLDOWN_KEY);
+    });
   });
 });
