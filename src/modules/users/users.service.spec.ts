@@ -4,7 +4,9 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { UsersService } from './users.service.js';
 
 describe('UsersService', () => {
-  const prisma = { user: { create: vi.fn(), findFirst: vi.fn() } };
+  const prisma = {
+    user: { create: vi.fn(), findFirst: vi.fn(), delete: vi.fn() },
+  };
   let service: UsersService;
 
   const profile = {
@@ -36,11 +38,21 @@ describe('UsersService', () => {
   it('creates the user and never returns the password hash', async () => {
     const createdAt = new Date('2026-11-13T15:00:00Z');
     // Even if the client returned the hash, it must not reach the DTO.
-    prisma.user.create.mockResolvedValue({ id: 'u-1', ...input, createdAt });
+    prisma.user.create.mockResolvedValue({
+      id: 'u-1',
+      ...input,
+      status: 'INACTIVE',
+      createdAt,
+    });
 
     const user = await service.create(input);
 
-    expect(user).toEqual({ id: 'u-1', ...profile, createdAt });
+    expect(user).toEqual({
+      id: 'u-1',
+      ...profile,
+      status: 'INACTIVE',
+      createdAt,
+    });
     expect(user).not.toHaveProperty('passwordHash');
     expect(prisma.user.create).toHaveBeenCalledWith({
       data: input,
@@ -50,6 +62,7 @@ describe('UsersService', () => {
         lastName: true,
         email: true,
         phone: true,
+        status: true,
         createdAt: true,
       },
     });
@@ -96,5 +109,13 @@ describe('UsersService', () => {
 
     await expect(service.create(input)).rejects.toBe(error);
     expect(prisma.user.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('deletes a user by id', async () => {
+    await service.delete('u-1');
+    expect(prisma.user.delete).toHaveBeenCalledWith({
+      where: { id: 'u-1' },
+      select: { id: true },
+    });
   });
 });

@@ -22,6 +22,7 @@ const USER_SELECT = {
   lastName: true,
   email: true,
   phone: true,
+  status: true,
   createdAt: true,
 } satisfies Prisma.UserSelect;
 
@@ -34,6 +35,7 @@ function toUserDto(user: SelectedUser): UserDto {
     lastName: user.lastName,
     email: user.email,
     phone: user.phone,
+    status: user.status,
     createdAt: user.createdAt,
   };
 }
@@ -70,6 +72,11 @@ export class UsersService {
       }
       throw err;
     }
+  }
+
+  /** Removes a user, e.g. to roll back a registration that could not finish. */
+  async delete(id: string): Promise<void> {
+    await this.prisma.user.delete({ where: { id }, select: { id: true } });
   }
 
   /**

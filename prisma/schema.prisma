@@ -16,18 +16,27 @@ model Province {
   @@map("province")
 }
 
+enum UserStatus {
+  /// Registered, email not verified yet.
+  INACTIVE
+  ACTIVE
+
+  @@map("user_status")
+}
+
 model User {
-  id           String   @id @default(uuid(7)) @db.Uuid
-  firstName    String   @map("first_name")
-  lastName     String   @map("last_name")
+  id           String     @id @default(uuid(7)) @db.Uuid
+  firstName    String     @map("first_name")
+  lastName     String     @map("last_name")
   /// Stored lowercased, so uniqueness is case-insensitive.
-  email        String   @unique
+  email        String     @unique
   /// E.164 format, e.g. +243812345678.
-  phone        String   @unique
+  phone        String     @unique
   /// argon2id hash. Never selected outside authentication code.
-  passwordHash String   @map("password_hash")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  passwordHash String     @map("password_hash")
+  status       UserStatus @default(INACTIVE)
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
 
   @@map("users")
 }
