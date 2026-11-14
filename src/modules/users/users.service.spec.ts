@@ -5,7 +5,13 @@ import { UsersService } from './users.service.js';
 
 describe('UsersService', () => {
   const prisma = {
-    user: { create: vi.fn(), findFirst: vi.fn(), delete: vi.fn() },
+    user: {
+      create: vi.fn(),
+      findFirst: vi.fn(),
+      findUnique: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+    },
   };
   let service: UsersService;
 
@@ -116,6 +122,62 @@ describe('UsersService', () => {
     expect(prisma.user.delete).toHaveBeenCalledWith({
       where: { id: 'u-1' },
       select: { id: true },
+    });
+  });
+
+  const SELECT = {
+    id: true,
+    firstName: true,
+    lastName: true,
+    email: true,
+    phone: true,
+    status: true,
+    createdAt: true,
+  };
+
+  it('finds a user by email without the password hash', async () => {
+    const createdAt = new Date();
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'u-1',
+      ...input,
+      status: 'INACTIVE',
+      createdAt,
+    });
+
+    const user = await service.findByEmail(profile.email);
+
+    expect(user).toEqual({
+      id: 'u-1',
+      ...profile,
+      status: 'INACTIVE',
+      createdAt,
+    });
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({
+      where: { email: profile.email },
+      select: SELECT,
+    });
+  });
+
+  it('returns null for an unknown email', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+    await expect(service.findByEmail('nobody@example.com')).resolves.toBeNull();
+  });
+
+  it('activates a user', async () => {
+    prisma.user.update.mockResolvedValue({
+      id: 'u-1',
+      ...profile,
+      status: 'ACTIVE',
+      createdAt: new Date(),
+    });
+
+    await expect(service.activate('u-1')).resolves.toMatchObject({
+      status: 'ACTIVE',
+    });
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'u-1' },
+      data: { status: 'ACTIVE' },
+      select: SELECT,
     });
   });
 });

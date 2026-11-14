@@ -17,6 +17,10 @@ export const PASSWORD_MAX_LENGTH = 128;
 const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
 
+/** Emails are stored trimmed and lowercased (see the User model). */
+export const normalizeEmail = ({ value }: { value: unknown }) =>
+  typeof value === 'string' ? value.trim().toLowerCase() : value;
+
 /** E.164: "+", a non-zero country code digit, 8 to 15 digits in total. */
 const E164 = /^\+[1-9]\d{7,14}$/;
 
@@ -40,9 +44,7 @@ export class RegisterDto {
     description: 'Trimmed and lowercased before being stored.',
     maxLength: 254,
   })
-  @Transform(({ value }: { value: unknown }) =>
-    typeof value === 'string' ? value.trim().toLowerCase() : value,
-  )
+  @Transform(normalizeEmail)
   @IsEmail()
   @MaxLength(254)
   readonly email: string;

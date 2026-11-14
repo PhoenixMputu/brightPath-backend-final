@@ -1,18 +1,24 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiOkResponse,
   ApiOperation,
   ApiServiceUnavailableResponse,
   ApiTags,
+  ApiTooManyRequestsResponse,
 } from '@nestjs/swagger';
 import { AuthService } from './auth.service.js';
 import { RegisterResponseDto } from './dto/register-response.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
+import { VerifyEmailResponseDto } from './dto/verify-email-response.dto.js';
+import { VerifyEmailDto } from './dto/verify-email.dto.js';
 
 export const REGISTER_SUCCESS_MESSAGE =
   'User registered successfully. A verification code has been sent by email.';
+
+export const VERIFY_EMAIL_SUCCESS_MESSAGE = 'Email verified successfully.';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -38,5 +44,31 @@ export class AuthController {
   async register(@Body() dto: RegisterDto): Promise<RegisterResponseDto> {
     const user = await this.authService.register(dto);
     return { message: REGISTER_SUCCESS_MESSAGE, data: user };
+  }
+
+  @Post('verify-email')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Verify the email with the code sent at registration',
+    description:
+      'Activates the account. A code allows 5 attempts and is single-use.',
+  })
+  @ApiOkResponse({ type: VerifyEmailResponseDto })
+  @ApiBadRequestResponse({
+    description:
+      'Invalid body, or `code` is OTP_INVALID (wrong code or unknown email) or OTP_EXPIRED.',
+  })
+  @ApiConflictResponse({
+    description: 'Already verified. `code` is EMAIL_ALREADY_VERIFIED.',
+  })
+  @ApiTooManyRequestsResponse({
+    description:
+      'Too many wrong codes; the code is revoked. `code` is OTP_TOO_MANY_ATTEMPTS.',
+  })
+  async verifyEmail(
+    @Body() dto: VerifyEmailDto,
+  ): Promise<VerifyEmailResponseDto> {
+    const user = await this.authService.verifyEmail(dto);
+    return { message: VERIFY_EMAIL_SUCCESS_MESSAGE, data: user };
   }
 }

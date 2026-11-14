@@ -1,12 +1,18 @@
 import {
+  BadRequestException,
+  ConflictException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { UserStatus } from '../../generated/prisma/enums.js';
 import { EmailService } from '../../integrations/resend/email.service.js';
 import { UserDto } from '../users/dto/user.dto.js';
 import { UsersService } from '../users/users.service.js';
 import { RegisterDto } from './dto/register.dto.js';
+import { VerifyEmailDto } from './dto/verify-email.dto.js';
 import { OtpService } from './otp.service.js';
 import { PasswordService } from './password.service.js';
 import { verificationEmail } from './verification-email.js';
@@ -58,6 +64,45 @@ export class AuthService {
     return user;
   }
 
+  /**
+   * Activates the account when the code matches. An unknown email gets the
+   * same answer as a wrong code.
+   */
+  async verifyEmail(dto: VerifyEmailDto): Promise<UserDto> {
+    const user = await this.usersService.findByEmail(dto.email);
+    if (!user) throw invalidCode();
+    if (user.status === UserStatus.ACTIVE) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'EMAIL_ALREADY_VERIFIED',
+        message: 'Email is already verified',
+      });
+    }
+
+    const check = await this.otpService.verify(user.id, dto.code);
+    switch (check) {
+      case 'valid':
+        return this.usersService.activate(user.id);
+      case 'invalid':
+        throw invalidCode();
+      case 'expired':
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'OTP_EXPIRED',
+          message: 'Verification code has expired, request a new one',
+        });
+      case 'too_many_attempts':
+        throw new HttpException(
+          {
+            statusCode: 429,
+            code: 'OTP_TOO_MANY_ATTEMPTS',
+            message: 'Too many attempts, request a new code',
+          },
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+    }
+  }
+
   private async rollBack(userId: string, cause: unknown): Promise<void> {
     const reason = cause instanceof Error ? cause.name : 'unknown';
     this.logger.warn(`Registration rolled back (${reason}): ${userId}`);
@@ -68,4 +113,12 @@ export class AuthService {
       );
     });
   }
+}
+
+function invalidCode(): BadRequestException {
+  return new BadRequestException({
+    statusCode: 400,
+    code: 'OTP_INVALID',
+    message: 'Verification code is invalid',
+  });
 }
