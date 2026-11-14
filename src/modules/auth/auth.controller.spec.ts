@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
   INestApplication,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -10,13 +11,18 @@ import { configureApp } from '../../app.setup.js';
 import {
   AuthController,
   REGISTER_SUCCESS_MESSAGE,
+  RESEND_CODE_MESSAGE,
   VERIFY_EMAIL_SUCCESS_MESSAGE,
 } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 
 describe('AuthController', () => {
   let app: INestApplication;
-  const authService = { register: vi.fn(), verifyEmail: vi.fn() };
+  const authService = {
+    register: vi.fn(),
+    verifyEmail: vi.fn(),
+    resendVerificationCode: vi.fn(),
+  };
 
   const profile = {
     firstName: 'Victory',
@@ -174,6 +180,52 @@ describe('AuthController', () => {
       authService.verifyEmail.mockRejectedValue(new BadRequestException(body));
 
       await verify(validBody).expect(400).expect(body);
+    });
+  });
+
+  describe('POST /auth/resend-verification-code', () => {
+    const resend = (body: object) =>
+      request(app.getHttpServer())
+        .post('/api/v1/auth/resend-verification-code')
+        .send(body);
+
+    it('answers 200 with a generic message', async () => {
+      authService.resendVerificationCode.mockResolvedValue(undefined);
+
+      await resend({ email: profile.email })
+        .expect(200)
+        .expect({ message: RESEND_CODE_MESSAGE });
+    });
+
+    it('normalizes the email', async () => {
+      authService.resendVerificationCode.mockResolvedValue(undefined);
+
+      await resend({ email: ' Victory.DEO@Example.com ' }).expect(200);
+      expect(authService.resendVerificationCode).toHaveBeenCalledWith({
+        email: profile.email,
+      });
+    });
+
+    it.each([
+      ['missing email', {}],
+      ['invalid email', { email: 'nope' }],
+      ['unknown field', { email: profile.email, userId: 'u-1' }],
+    ])('rejects %s with 400', async (_label, body) => {
+      await resend(body).expect(400);
+      expect(authService.resendVerificationCode).not.toHaveBeenCalled();
+    });
+
+    it('returns the 429 body produced by the service', async () => {
+      const body = {
+        statusCode: 429,
+        code: 'OTP_RESEND_TOO_SOON',
+        message: 'A code was sent recently, please wait before asking again',
+      };
+      authService.resendVerificationCode.mockRejectedValue(
+        new HttpException(body, 429),
+      );
+
+      await resend({ email: profile.email }).expect(429).expect(body);
     });
   });
 });

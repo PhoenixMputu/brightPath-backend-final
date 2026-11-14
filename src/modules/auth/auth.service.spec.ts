@@ -22,7 +22,13 @@ describe('AuthService', () => {
     activate: vi.fn(),
   };
   const passwordService = { hash: vi.fn(), verify: vi.fn() };
-  const otpService = { issue: vi.fn(), revoke: vi.fn(), verify: vi.fn() };
+  const otpService = {
+    issue: vi.fn(),
+    revoke: vi.fn(),
+    verify: vi.fn(),
+    tryStartCooldown: vi.fn(),
+    clearCooldown: vi.fn(),
+  };
   const emailService = { send: vi.fn() };
   const service = new AuthService(
     usersService as unknown as UsersService,
@@ -222,6 +228,93 @@ describe('AuthService', () => {
       const err = await service.verifyEmail(input).catch((e: unknown) => e);
       expect(err).not.toBeInstanceOf(BadRequestException);
       expect(err).toBe(failure);
+    });
+  });
+
+  describe('resendVerificationCode', () => {
+    const input = { email: profile.email };
+
+    beforeEach(() => {
+      usersService.findByEmail.mockResolvedValue(user);
+      otpService.tryStartCooldown.mockResolvedValue(true);
+      otpService.clearCooldown.mockResolvedValue(undefined);
+    });
+
+    it('issues a new code and emails it with a fresh idempotency key', async () => {
+      await expect(
+        service.resendVerificationCode(input),
+      ).resolves.toBeUndefined();
+      await service.resendVerificationCode(input);
+
+      expect(usersService.findByEmail).toHaveBeenCalledWith(profile.email);
+      expect(otpService.tryStartCooldown).toHaveBeenCalledWith('u-1');
+      expect(otpService.issue).toHaveBeenCalledWith('u-1');
+      const [first, second] = emailService.send.mock.calls.map(
+        ([arg]) => arg as { to: string; idempotencyKey: string; text: string },
+      );
+      expect(first.to).toBe(profile.email);
+      expect(first.text).toContain('042137');
+      expect(first.idempotencyKey).toMatch(/^resend-otp\/u-1\/[0-9a-f-]{36}$/);
+      expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
+    });
+
+    it.each([
+      ['an unknown email', null],
+      ['an already verified user', { ...user, status: 'ACTIVE' }],
+    ])('silently does nothing for %s', async (_label, found) => {
+      usersService.findByEmail.mockResolvedValue(found);
+
+      await expect(
+        service.resendVerificationCode(input),
+      ).resolves.toBeUndefined();
+      expect(otpService.tryStartCooldown).not.toHaveBeenCalled();
+      expect(otpService.issue).not.toHaveBeenCalled();
+      expect(emailService.send).not.toHaveBeenCalled();
+    });
+
+    it('answers 429 during the cooldown and keeps the current code', async () => {
+      otpService.tryStartCooldown.mockResolvedValue(false);
+
+      const err = await service
+        .resendVerificationCode(input)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(HttpException);
+      expect((err as HttpException).getStatus()).toBe(429);
+      expect((err as HttpException).getResponse()).toEqual({
+        statusCode: 429,
+        code: 'OTP_RESEND_TOO_SOON',
+        message: 'A code was sent recently, please wait before asking again',
+      });
+      expect(otpService.issue).not.toHaveBeenCalled();
+      expect(emailService.send).not.toHaveBeenCalled();
+    });
+
+    it('answers 503 and lifts the cooldown when the email cannot be sent', async () => {
+      emailService.send.mockRejectedValue(
+        new EmailDeliveryError('TimeoutError'),
+      );
+
+      const err = await service
+        .resendVerificationCode(input)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ServiceUnavailableException);
+      expect((err as ServiceUnavailableException).getResponse()).toMatchObject({
+        code: 'VERIFICATION_EMAIL_NOT_SENT',
+      });
+      expect(otpService.clearCooldown).toHaveBeenCalledWith('u-1');
+      // Unlike a failed registration, the account is kept.
+      expect(usersService.delete).not.toHaveBeenCalled();
+    });
+
+    it('answers 503 when the new code cannot be stored', async () => {
+      otpService.issue.mockRejectedValue(new Error('ECONNREFUSED'));
+
+      const err = await service
+        .resendVerificationCode(input)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ServiceUnavailableException);
+      expect(emailService.send).not.toHaveBeenCalled();
+      expect(otpService.clearCooldown).toHaveBeenCalledWith('u-1');
     });
   });
 });
