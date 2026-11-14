@@ -1,5 +1,6 @@
 import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client.js';
+import { UserStatus } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { UserDto } from './dto/user.dto.js';
 
@@ -72,6 +73,24 @@ export class UsersService {
       }
       throw err;
     }
+  }
+
+  async findByEmail(email: string): Promise<UserDto | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+      select: USER_SELECT,
+    });
+    return user && toUserDto(user);
+  }
+
+  async activate(id: string): Promise<UserDto> {
+    const user = await this.prisma.user.update({
+      where: { id },
+      data: { status: UserStatus.ACTIVE } satisfies Prisma.UserUpdateInput,
+      select: USER_SELECT,
+    });
+    this.logger.log(`User activated: ${user.id}`);
+    return toUserDto(user);
   }
 
   /** Removes a user, e.g. to roll back a registration that could not finish. */
