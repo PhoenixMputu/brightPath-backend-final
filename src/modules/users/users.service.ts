@@ -8,9 +8,14 @@ export interface CreateUserInput {
   lastName: string;
   email: string;
   phone: string;
+  /** Already hashed by the caller: this service never sees a plain password. */
+  passwordHash: string;
 }
 
-/** Only the fields exposed by UserDto are read from the database. */
+/**
+ * Only the fields exposed by UserDto are read from the database; in
+ * particular `passwordHash` is never selected here.
+ */
 const USER_SELECT = {
   id: true,
   firstName: true,
@@ -46,7 +51,15 @@ export class UsersService {
   async create(input: CreateUserInput): Promise<UserDto> {
     try {
       const user = await this.prisma.user.create({
-        data: input,
+        // Prisma's generic `create` signature does not reject unknown fields in
+        // `data`; `satisfies` does, so a schema/client mismatch fails to compile.
+        data: {
+          firstName: input.firstName,
+          lastName: input.lastName,
+          email: input.email,
+          phone: input.phone,
+          passwordHash: input.passwordHash,
+        } satisfies Prisma.UserCreateInput,
         select: USER_SELECT,
       });
       this.logger.log(`User created: ${user.id}`);
