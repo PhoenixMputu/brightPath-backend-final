@@ -80,6 +80,10 @@ describe('HealthController', () => {
       .get('/api/v1/health')
       .expect(503);
 
+    expect(res.body).toMatchObject({
+      statusCode: 503,
+      code: 'HEALTH_CHECK_FAILED',
+    });
     expect(res.body.details.database).toEqual({
       status: 'down',
       message: 'Database is unreachable',
