@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { buildPaginationMeta } from '../common/dto/pagination.dto.js';
+import type { Env } from '../config/env.schema.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CacheService } from '../redis/cache.service.js';
@@ -13,7 +14,6 @@ import {
 import { ProvinceDto, ProvincePageDto } from './dto/province-response.dto.js';
 
 export const PROVINCES_CACHE_NAMESPACE = redisKey('provinces', 'list');
-const DEFAULT_CACHE_TTL_SECONDS = 300;
 
 /** Only the fields exposed by ProvinceDto are read from the database. */
 const PROVINCE_SELECT = {
@@ -32,11 +32,11 @@ export class ProvinceService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cache: CacheService,
-    config: ConfigService,
+    config: ConfigService<Env, true>,
   ) {
-    this.cacheTtlSeconds =
-      Number(config.get('PROVINCES_CACHE_TTL_SECONDS')) ||
-      DEFAULT_CACHE_TTL_SECONDS;
+    this.cacheTtlSeconds = config.get('PROVINCES_CACHE_TTL_SECONDS', {
+      infer: true,
+    });
   }
 
   async create(dto: CreateProvinceDto): Promise<ProvinceDto> {

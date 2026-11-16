@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { TerminusModule } from '@nestjs/terminus';
 import { Redis } from 'ioredis';
+import type { Env } from '../config/env.schema.js';
 import { CacheService } from './cache.service.js';
 import { REDIS_CLIENT } from './redis.constants.js';
 import { RedisHealthIndicator } from './redis.health.js';
@@ -36,9 +37,9 @@ function waitForReady(client: Redis, timeoutMs: number): Promise<boolean> {
     {
       provide: REDIS_CLIENT,
       inject: [ConfigService],
-      useFactory: async (config: ConfigService) => {
+      useFactory: async (config: ConfigService<Env, true>) => {
         const logger = new Logger('Redis');
-        const client = new Redis(config.getOrThrow<string>('REDIS_URL'), {
+        const client = new Redis(config.get('REDIS_URL', { infer: true }), {
           // Fail fast instead of queueing commands while Redis is unreachable:
           // CacheService then falls back to the database.
           enableOfflineQueue: false,

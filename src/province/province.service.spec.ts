@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import type { Env } from '../config/env.schema.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CacheService } from '../redis/cache.service.js';
 import {
@@ -36,11 +37,11 @@ describe('ProvinceService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    config.get.mockReturnValue(undefined);
+    config.get.mockReturnValue(300);
     service = new ProvinceService(
       prisma as unknown as PrismaService,
       cache as unknown as CacheService,
-      config as unknown as ConfigService,
+      config as unknown as ConfigService<Env, true>,
     );
   });
 
@@ -123,11 +124,11 @@ describe('ProvinceService', () => {
     });
 
     it('caches under a key covering every query parameter', async () => {
-      config.get.mockReturnValue('120');
+      config.get.mockReturnValue(120);
       service = new ProvinceService(
         prisma as unknown as PrismaService,
         cache as unknown as CacheService,
-        config as unknown as ConfigService,
+        config as unknown as ConfigService<Env, true>,
       );
       prisma.province.count.mockResolvedValue(0);
       prisma.province.findMany.mockResolvedValue([]);
