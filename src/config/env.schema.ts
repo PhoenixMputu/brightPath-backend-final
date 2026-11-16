@@ -11,6 +11,11 @@ export const LOG_LEVELS = [
   'silent',
 ] as const;
 
+/** "true" / "false" only: z.coerce.boolean() would read "false" as true. */
+const booleanFlag = z
+  .enum(['true', 'false'])
+  .transform((value) => value === 'true');
+
 export const envSchema = z
   .object({
     NODE_ENV: z
@@ -33,6 +38,9 @@ export const envSchema = z
     RESEND_API_KEY: z.string().min(1),
     MAIL_FROM: z.string().min(1),
 
+    /** Swagger UI at /docs. Defaults to on, except in production. */
+    SWAGGER_ENABLED: booleanFlag.optional(),
+
     CORS_ORIGINS: z.string().transform((value, ctx) => {
       try {
         return parseCorsOrigins(value);
@@ -47,6 +55,7 @@ export const envSchema = z
   })
   .transform((env) => ({
     ...env,
+    SWAGGER_ENABLED: env.SWAGGER_ENABLED ?? env.NODE_ENV !== 'production',
     LOG_LEVEL:
       env.LOG_LEVEL ?? (env.NODE_ENV === 'production' ? 'info' : 'debug'),
   }));

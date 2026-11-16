@@ -16,6 +16,7 @@ describe('validateEnv', () => {
       PORT: 8000,
       PROVINCES_CACHE_TTL_SECONDS: 300,
       LOG_LEVEL: 'debug',
+      SWAGGER_ENABLED: true,
       CORS_ORIGINS: ['http://localhost:3000', 'https://app.example.com'],
     });
   });
@@ -42,7 +43,21 @@ describe('validateEnv', () => {
     ).toBe('warn');
   });
 
+  it('disables Swagger in production unless explicitly enabled', () => {
+    expect(
+      validateEnv({ ...valid, NODE_ENV: 'production' }).SWAGGER_ENABLED,
+    ).toBe(false);
+    expect(
+      validateEnv({ ...valid, NODE_ENV: 'production', SWAGGER_ENABLED: 'true' })
+        .SWAGGER_ENABLED,
+    ).toBe(true);
+    expect(
+      validateEnv({ ...valid, SWAGGER_ENABLED: 'false' }).SWAGGER_ENABLED,
+    ).toBe(false);
+  });
+
   it.each([
+    ['SWAGGER_ENABLED', 'yes'],
     ['DATABASE_URL', undefined],
     ['DATABASE_URL', 'mysql://host/db'],
     ['REDIS_URL', 'http://redis.example.com'],
