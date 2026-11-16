@@ -12,6 +12,7 @@ import type { Env } from '../config/env.schema.js';
 import { CacheService } from './cache.service.js';
 import { REDIS_CLIENT } from './redis.constants.js';
 import { RedisHealthIndicator } from './redis.health.js';
+import { RedisThrottlerStorage } from './redis-throttler.storage.js';
 
 const CONNECT_TIMEOUT_MS = 5_000;
 
@@ -62,10 +63,16 @@ function waitForReady(client: Redis, timeoutMs: number): Promise<boolean> {
     },
     CacheService,
     RedisHealthIndicator,
+    RedisThrottlerStorage,
   ],
   // REDIS_CLIENT is shared for short-lived data (OTPs) that must not go
   // through the cache's database fallback.
-  exports: [REDIS_CLIENT, CacheService, RedisHealthIndicator],
+  exports: [
+    REDIS_CLIENT,
+    CacheService,
+    RedisHealthIndicator,
+    RedisThrottlerStorage,
+  ],
 })
 export class RedisModule implements OnApplicationShutdown {
   constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}

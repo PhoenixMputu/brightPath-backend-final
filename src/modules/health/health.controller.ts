@@ -5,10 +5,13 @@ import {
   HealthCheckResult,
   HealthCheckService,
 } from '@nestjs/terminus';
+import { SkipThrottle } from '@nestjs/throttler';
 import { PrismaHealthIndicator } from '../../prisma/prisma.health.js';
 import { RedisHealthIndicator } from '../../redis/redis.health.js';
 
 @ApiTags('health')
+// Probes are frequent and come from the orchestrator, not from clients.
+@SkipThrottle()
 @Controller('health')
 export class HealthController {
   constructor(

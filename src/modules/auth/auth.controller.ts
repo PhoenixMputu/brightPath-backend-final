@@ -9,6 +9,8 @@ import {
   ApiTags,
   ApiTooManyRequestsResponse,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
+import { SENSITIVE_THROTTLE } from '../../common/throttle.js';
 import { AuthService } from './auth.service.js';
 import { MessageResponseDto } from './dto/message-response.dto.js';
 import { RegisterResponseDto } from './dto/register-response.dto.js';
@@ -26,6 +28,7 @@ export const RESEND_CODE_MESSAGE =
   'If this email belongs to an unverified account, a new code has been sent.';
 
 @ApiTags('auth')
+@Throttle({ default: SENSITIVE_THROTTLE })
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
