@@ -1,11 +1,11 @@
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module.js';
 import { configureApp } from './app.setup.js';
 import { buildCorsOptions } from './common/utils/cors.js';
 import type { Env } from './config/env.schema.js';
+import { setupSwagger } from './swagger.js';
 
 async function bootstrap() {
   // Startup logs are buffered until pino takes over, so every line is JSON.
@@ -19,15 +19,7 @@ async function bootstrap() {
   // Runs onApplicationShutdown (Redis/Prisma disconnect) on SIGTERM/SIGINT.
   app.enableShutdownHooks();
 
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle('BrightPath API')
-    .setVersion('1.0')
-    .build();
-  SwaggerModule.setup(
-    'api/docs',
-    app,
-    SwaggerModule.createDocument(app, swaggerConfig),
-  );
+  if (config.get('SWAGGER_ENABLED', { infer: true })) setupSwagger(app);
 
   await app.listen(config.get('PORT', { infer: true }));
 }
