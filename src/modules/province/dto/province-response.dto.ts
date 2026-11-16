@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { PaginationMetaDto } from '../../common/dto/pagination.dto.js';
+import { PaginationMetaDto } from '../../../common/dto/pagination.dto.js';
 
 export class ProvinceDto {
   @ApiProperty({

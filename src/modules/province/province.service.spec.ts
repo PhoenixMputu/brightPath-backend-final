@@ -1,7 +1,7 @@
 import { ConfigService } from '@nestjs/config';
-import type { Env } from '../config/env.schema.js';
-import { PrismaService } from '../prisma/prisma.service.js';
-import { CacheService } from '../redis/cache.service.js';
+import type { Env } from '../../config/env.schema.js';
+import { PrismaService } from '../../prisma/prisma.service.js';
+import { CacheService } from '../../redis/cache.service.js';
 import {
   ListProvincesQueryDto,
   ProvinceSortField,

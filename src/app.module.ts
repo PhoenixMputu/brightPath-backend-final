@@ -9,7 +9,7 @@ import { LoggerModule } from './logger/logger.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { HealthModule } from './modules/health/health.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
-import { ProvinceModule } from './province/province.module.js';
+import { ProvinceModule } from './modules/province/province.module.js';
 import { RedisModule } from './redis/redis.module.js';
 import { RedisThrottlerStorage } from './redis/redis-throttler.storage.js';
 import { DEFAULT_THROTTLE, THROTTLE_ERROR_MESSAGE } from './common/throttle.js';

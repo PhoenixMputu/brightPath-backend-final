@@ -1,11 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { buildPaginationMeta } from '../common/dto/pagination.dto.js';
-import type { Env } from '../config/env.schema.js';
-import { Prisma } from '../generated/prisma/client.js';
-import { PrismaService } from '../prisma/prisma.service.js';
-import { CacheService } from '../redis/cache.service.js';
-import { redisKey } from '../redis/redis-keys.js';
+import { buildPaginationMeta } from '../../common/dto/pagination.dto.js';
+import type { Env } from '../../config/env.schema.js';
+import { Prisma } from '../../generated/prisma/client.js';
+import { PrismaService } from '../../prisma/prisma.service.js';
+import { CacheService } from '../../redis/cache.service.js';
+import { redisKey } from '../../redis/redis-keys.js';
 import { CreateProvinceDto } from './dto/create-province.dto.js';
 import {
   ListProvincesQueryDto,
