@@ -15,7 +15,11 @@ export function parseCorsOrigins(value: string | undefined): string[] {
     throw new Error('CORS_ORIGINS must list at least one allowed origin');
   }
   for (const origin of origins) {
-    if (origin === '*' || !URL.canParse(origin) || new URL(origin).origin !== origin) {
+    if (
+      origin === '*' ||
+      !URL.canParse(origin) ||
+      new URL(origin).origin !== origin
+    ) {
       throw new Error(`CORS_ORIGINS contains an invalid origin: "${origin}"`);
     }
   }

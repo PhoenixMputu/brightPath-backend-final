@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Resend } from 'resend';
+import type { Env } from '../../config/env.schema.js';
 import { EmailService } from './email.service.js';
 import { MAIL_FROM, RESEND_CLIENT } from './resend.constants.js';
 
@@ -9,14 +10,14 @@ import { MAIL_FROM, RESEND_CLIENT } from './resend.constants.js';
     {
       provide: RESEND_CLIENT,
       inject: [ConfigService],
-      useFactory: (config: ConfigService) =>
-        new Resend(config.getOrThrow<string>('RESEND_API_KEY')),
+      useFactory: (config: ConfigService<Env, true>) =>
+        new Resend(config.get('RESEND_API_KEY', { infer: true })),
     },
     {
       provide: MAIL_FROM,
       inject: [ConfigService],
-      useFactory: (config: ConfigService) =>
-        config.getOrThrow<string>('MAIL_FROM'),
+      useFactory: (config: ConfigService<Env, true>) =>
+        config.get('MAIL_FROM', { infer: true }),
     },
     EmailService,
   ],
