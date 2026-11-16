@@ -32,7 +32,7 @@ export class RedisHealthIndicator {
       await withTimeout(this.redis.ping(), REDIS_HEALTH_TIMEOUT_MS);
       return indicator.up();
     } catch (err) {
-      this.logger.warn(`Redis health check failed: ${String(err)}`);
+      this.logger.warn({ err }, 'Redis health check failed');
       return indicator.degraded({ message: 'Redis is unreachable' });
     }
   }

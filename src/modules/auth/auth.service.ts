@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { UserStatus } from '../../generated/prisma/enums.js';
+import { errorSummary } from '../../common/utils/error-summary.js';
 import { EmailService } from '../../integrations/resend/email.service.js';
 import { UserDto } from '../users/dto/user.dto.js';
 import { UsersService } from '../users/users.service.js';
@@ -81,9 +82,9 @@ export class AuthService {
       // make Resend answer 409.
       await this.sendCode(user, `resend-otp/${user.id}/${randomUUID()}`);
     } catch (err) {
-      const reason = err instanceof Error ? err.name : 'unknown';
       this.logger.warn(
-        `Verification code resend failed (${reason}): ${user.id}`,
+        { err: errorSummary(err), userId: user.id },
+        'Verification code resend failed',
       );
       // The previous code may already be replaced: let the user retry now.
       await this.otpService.clearCooldown(user.id).catch(() => undefined);
@@ -137,16 +138,19 @@ export class AuthService {
       ...verificationEmail(user.firstName, code),
       idempotencyKey,
     });
-    this.logger.log(`Verification code sent: ${user.id}`);
+    this.logger.log({ userId: user.id }, 'Verification code sent');
   }
 
   private async rollBack(userId: string, cause: unknown): Promise<void> {
-    const reason = cause instanceof Error ? cause.name : 'unknown';
-    this.logger.warn(`Registration rolled back (${reason}): ${userId}`);
+    this.logger.warn(
+      { err: errorSummary(cause), userId },
+      'Registration rolled back',
+    );
     await this.otpService.revoke(userId).catch(() => undefined);
     await this.usersService.delete(userId).catch((err: unknown) => {
       this.logger.error(
-        `Rollback failed, inactive user left without a code (${err instanceof Error ? err.name : 'unknown'}): ${userId}`,
+        { err: errorSummary(err), userId },
+        'Registration rollback failed, inactive user left without a code',
       );
     });
   }
