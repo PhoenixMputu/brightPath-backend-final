@@ -38,7 +38,7 @@ export class CacheService {
       const cached = await this.redis.get(key);
       if (cached !== null) return JSON.parse(cached) as T;
     } catch (err) {
-      this.logger.warn(`Cache read skipped for "${namespace}": ${String(err)}`);
+      this.logger.warn({ err, namespace }, 'Cache read skipped');
       return loader();
     }
 
@@ -46,7 +46,7 @@ export class CacheService {
     try {
       await this.redis.set(key, JSON.stringify(value), 'EX', ttlSeconds);
     } catch (err) {
-      this.logger.warn(`Cache write skipped for "${key}": ${String(err)}`);
+      this.logger.warn({ err, key }, 'Cache write skipped');
     }
     return value;
   }
@@ -61,9 +61,7 @@ export class CacheService {
         .exec();
     } catch (err) {
       // Entries of this namespace stay readable until their TTL expires.
-      this.logger.error(
-        `Cache invalidation failed for "${namespace}": ${String(err)}`,
-      );
+      this.logger.error({ err, namespace }, 'Cache invalidation failed');
     }
   }
 

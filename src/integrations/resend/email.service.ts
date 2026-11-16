@@ -55,14 +55,15 @@ export class EmailService {
       // The SDK reports API errors in `error`; a throw is a network failure
       // or the timeout.
       const reason = err instanceof Error ? err.name : 'unknown';
-      this.logger.warn(`Resend request failed (${reason})`);
+      this.logger.warn({ reason }, 'Resend request failed');
       throw new EmailDeliveryError(reason);
     }
 
     if (result.error) {
       // Only the error name and status: the message may quote the recipient.
       this.logger.warn(
-        `Resend rejected the email (${result.error.name}, ${result.error.statusCode ?? 'no status'})`,
+        { reason: result.error.name, statusCode: result.error.statusCode },
+        'Resend rejected the email',
       );
       throw new EmailDeliveryError(result.error.name);
     }

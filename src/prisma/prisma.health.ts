@@ -3,6 +3,7 @@ import {
   HealthIndicatorResult,
   HealthIndicatorService,
 } from '@nestjs/terminus';
+import { errorSummary } from '../common/utils/error-summary.js';
 import { withTimeout } from '../common/utils/with-timeout.js';
 import { PrismaService } from './prisma.service.js';
 
@@ -29,8 +30,11 @@ export class PrismaHealthIndicator {
       );
       return indicator.up();
     } catch (err) {
-      // The Prisma error can contain connection details: log it, never return it.
-      this.logger.error(`Database health check failed: ${String(err)}`);
+      // The Prisma message can contain connection details: log only its type.
+      this.logger.error(
+        { err: errorSummary(err) },
+        'Database health check failed',
+      );
       return indicator.down({ message: 'Database is unreachable' });
     }
   }

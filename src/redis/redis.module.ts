@@ -46,14 +46,15 @@ function waitForReady(client: Redis, timeoutMs: number): Promise<boolean> {
           maxRetriesPerRequest: 1,
           connectTimeout: CONNECT_TIMEOUT_MS,
         });
-        client.on('error', (err) => logger.warn(err.message));
+        client.on('error', (err) => logger.warn({ err }, 'Redis client error'));
 
         // Without an offline queue, requests served before the connection is
         // ready would skip the cache: wait for it, but never block startup.
         const ready = await waitForReady(client, CONNECT_TIMEOUT_MS);
         if (!ready) {
           logger.warn(
-            'Redis not ready at startup; serving uncached until it connects.',
+            { timeoutMs: CONNECT_TIMEOUT_MS },
+            'Redis not ready at startup, serving uncached',
           );
         }
         return client;

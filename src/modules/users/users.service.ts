@@ -65,7 +65,7 @@ export class UsersService {
         } satisfies Prisma.UserCreateInput,
         select: USER_SELECT,
       });
-      this.logger.log(`User created: ${user.id}`);
+      this.logger.log({ userId: user.id }, 'User created');
       return toUserDto(user);
     } catch (err) {
       if (isUniqueConstraintError(err)) {
@@ -89,7 +89,7 @@ export class UsersService {
       data: { status: UserStatus.ACTIVE } satisfies Prisma.UserUpdateInput,
       select: USER_SELECT,
     });
-    this.logger.log(`User activated: ${user.id}`);
+    this.logger.log({ userId: user.id }, 'User activated');
     return toUserDto(user);
   }
 
