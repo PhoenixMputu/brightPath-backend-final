@@ -1,7 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
-import { PaginationQueryDto } from '../../common/dto/pagination.dto.js';
+import { PaginationQueryDto } from '../../../common/dto/pagination.dto.js';
 
 export enum ProvinceSortField {
   Name = 'name',

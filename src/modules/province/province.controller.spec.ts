@@ -1,7 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { configureApp } from '../app.setup.js';
+import { configureApp } from '../../app.setup.js';
 import { ProvinceController } from './province.controller.js';
 import { ProvinceService } from './province.service.js';
 
