@@ -1,4 +1,9 @@
-import { ConflictException, Injectable, Logger } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client.js';
 import { UserStatus } from '../../generated/prisma/enums.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
@@ -81,6 +86,22 @@ export class UsersService {
       select: USER_SELECT,
     });
     return user && toUserDto(user);
+  }
+
+  /** Throws 404 USER_NOT_FOUND, e.g. when the account was deleted. */
+  async findById(id: string): Promise<UserDto> {
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: USER_SELECT,
+    });
+    if (!user) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'USER_NOT_FOUND',
+        message: 'User not found',
+      });
+    }
+    return toUserDto(user);
   }
 
   async activate(id: string): Promise<UserDto> {

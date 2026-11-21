@@ -13,6 +13,8 @@ import { ProvinceModule } from './modules/province/province.module.js';
 import { RedisModule } from './redis/redis.module.js';
 import { RedisThrottlerStorage } from './redis/redis-throttler.storage.js';
 import { DEFAULT_THROTTLE, THROTTLE_ERROR_MESSAGE } from './common/throttle.js';
+import { JwtAuthGuard } from './common/guards/jwt-auth.guard.js';
+import { UsersModule } from './modules/users/users.module.js';
 
 @Module({
   imports: [
@@ -35,8 +37,15 @@ import { DEFAULT_THROTTLE, THROTTLE_ERROR_MESSAGE } from './common/throttle.js';
     ProvinceModule,
     HealthModule,
     AuthModule,
+    UsersModule,
   ],
   controllers: [AppController],
-  providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],
+  providers: [
+    AppService,
+    // Global guards run in this order: rate limiting first, so it also
+    // covers unauthenticated requests, then authentication.
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
+  ],
 })
 export class AppModule {}

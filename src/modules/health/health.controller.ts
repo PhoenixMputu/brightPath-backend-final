@@ -6,12 +6,15 @@ import {
   HealthCheckService,
 } from '@nestjs/terminus';
 import { SkipThrottle } from '@nestjs/throttler';
+import { Public } from '../../common/decorators/public.decorator.js';
 import { PrismaHealthIndicator } from '../../prisma/prisma.health.js';
 import { RedisHealthIndicator } from '../../redis/redis.health.js';
 
 @ApiTags('health')
 // Probes are frequent and come from the orchestrator, not from clients.
 @SkipThrottle()
+// Probes carry no credentials.
+@Public()
 @Controller('health')
 export class HealthController {
   constructor(

@@ -30,6 +30,7 @@ const { REDIS_CLIENT } = await import('../src/redis/redis.constants.js');
 const { EmailService } =
   await import('../src/integrations/resend/email.service.js');
 const { JwtService } = await import('@nestjs/jwt');
+const { setupSwagger } = await import('../src/swagger.js');
 
 interface Province {
   id: string;
@@ -140,6 +141,19 @@ describe('Provinces (e2e)', () => {
     await app.close();
   });
 
+  /** An access_token cookie, as set by POST /auth/verify-email. */
+  const signedIn = async () => {
+    const token = await new JwtService({}).signAsync(
+      { sub: 'u-1', sid: 's-1', typ: 'access' },
+      {
+        secret: process.env.JWT_ACCESS_SECRET,
+        expiresIn: 900,
+        algorithm: 'HS256',
+      },
+    );
+    return `access_token=${token}`;
+  };
+
   it('GET /api/v1/health reports the database and Redis as up', async () => {
     const res = await request(app.getHttpServer())
       .get('/api/v1/health')
@@ -175,6 +189,7 @@ describe('Provinces (e2e)', () => {
 
     await request(app.getHttpServer())
       .post('/api/v1/provinces')
+      .set('Cookie', await signedIn())
       .send({ name: 'Lualaba' })
       .expect(201)
       .expect((res) =>
@@ -188,9 +203,24 @@ describe('Provinces (e2e)', () => {
     expect(prisma.province.findMany).toHaveBeenCalledTimes(2);
   });
 
+  it('POST /api/v1/provinces requires a signed-in user', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/v1/provinces')
+      .send({ name: 'Lualaba' })
+      .expect(401);
+
+    expect(res.body).toEqual({
+      statusCode: 401,
+      code: 'UNAUTHENTICATED',
+      message: 'Authentication required',
+    });
+    expect(prisma.province.create).not.toHaveBeenCalled();
+  });
+
   it('rejects invalid input with VALIDATION_FAILED', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/v1/provinces')
+      .set('Cookie', await signedIn())
       .send({ name: '', extra: 1 })
       .expect(400);
 
@@ -241,8 +271,12 @@ function fakeUsers() {
         return Promise.resolve(row);
       },
     ),
-    findUnique: vi.fn(({ where }: { where: { email: string } }) =>
-      Promise.resolve(rows.find((row) => row.email === where.email) ?? null),
+    findUnique: vi.fn(({ where }: { where: { email?: string; id?: string } }) =>
+      Promise.resolve(
+        rows.find((row) =>
+          where.id ? row.id === where.id : row.email === where.email,
+        ) ?? null,
+      ),
     ),
     update: vi.fn(
       ({ where, data }: { where: { id: string }; data: Partial<UserRow> }) => {
@@ -375,5 +409,67 @@ describe('Email verification (e2e)', () => {
     const again = await post('verify-email', { email: profile.email, code });
     expect(again.status).toBe(409);
     expect(again.headers['set-cookie']).toBeUndefined();
+
+    // The access cookie now identifies the user on protected routes.
+    const me = await request(app.getHttpServer())
+      .get('/api/v1/users/me')
+      .set('Cookie', `access_token=${access.value}`)
+      .expect(200);
+    expect(me.body).toMatchObject({
+      message: 'User retrieved successfully.',
+      data: { id: users.rows[0].id, email: profile.email, status: 'ACTIVE' },
+    });
+    expect(me.body.data).not.toHaveProperty('passwordHash');
+
+    // The refresh token cannot stand in for the access token (its secret
+    // differs; the typ check is covered in jwt-auth.guard.spec.ts).
+    const swapped = await request(app.getHttpServer())
+      .get('/api/v1/users/me')
+      .set('Cookie', `access_token=${refresh.value}`)
+      .expect(401);
+    expect(swapped.body.code).toBe('UNAUTHENTICATED');
+  });
+
+  it('GET /api/v1/users/me answers 401 without the access cookie', async () => {
+    const res = await request(app.getHttpServer())
+      .get('/api/v1/users/me')
+      .expect(401);
+    expect(res.body.code).toBe('UNAUTHENTICATED');
+  });
+});
+
+describe('Swagger (e2e)', () => {
+  it('documents cookie auth on protected routes only', async () => {
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(PrismaService)
+      .useValue(fakePrisma([]))
+      .overrideProvider(REDIS_CLIENT)
+      .useValue(fakeRedis())
+      .compile();
+    const app = configureApp(moduleRef.createNestApplication());
+    setupSwagger(app);
+    await app.init();
+
+    try {
+      const { body: spec } = await request(app.getHttpServer())
+        .get('/docs-json')
+        .expect(200);
+
+      expect(spec.components.securitySchemes.access_token).toEqual({
+        type: 'apiKey',
+        in: 'cookie',
+        name: 'access_token',
+        description: 'httpOnly cookie set when the user signs in.',
+      });
+      const cookieAuth = [{ access_token: [] }];
+      expect(spec.paths['/api/v1/users/me'].get.security).toEqual(cookieAuth);
+      expect(spec.paths['/api/v1/provinces'].post.security).toEqual(cookieAuth);
+      expect(spec.paths['/api/v1/provinces'].get.security).toBeUndefined();
+      expect(
+        spec.paths['/api/v1/auth/verify-email'].post.security,
+      ).toBeUndefined();
+    } finally {
+      await app.close();
+    }
   });
 });

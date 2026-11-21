@@ -1,11 +1,16 @@
 import { Body, Controller, Get, Post, Query } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
+  ApiCookieAuth,
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
+  ApiTooManyRequestsResponse,
+  ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { Public } from '../../common/decorators/public.decorator.js';
+import { ACCESS_TOKEN_COOKIE } from '../auth/auth-cookies.js';
 import { CreateProvinceDto } from './dto/create-province.dto.js';
 import { ListProvincesQueryDto } from './dto/list-provinces-query.dto.js';
 import {
@@ -20,9 +25,17 @@ export class ProvinceController {
   constructor(private readonly provinceService: ProvinceService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create a province' })
+  @ApiCookieAuth(ACCESS_TOKEN_COOKIE)
+  @ApiOperation({ summary: 'Create a province (signed-in users only)' })
   @ApiCreatedResponse({ type: CreateProvinceResponseDto })
   @ApiBadRequestResponse({ description: 'Invalid request body.' })
+  @ApiUnauthorizedResponse({
+    description:
+      'Not signed in. `code` is UNAUTHENTICATED, or ACCESS_TOKEN_EXPIRED when the access token must be refreshed.',
+  })
+  @ApiTooManyRequestsResponse({
+    description: 'Rate limit exceeded. `code` is TOO_MANY_REQUESTS.',
+  })
   async create(
     @Body() dto: CreateProvinceDto,
   ): Promise<CreateProvinceResponseDto> {
@@ -30,6 +43,7 @@ export class ProvinceController {
     return { message: 'Province created successfully.', data: province };
   }
 
+  @Public()
   @Get()
   @ApiOperation({
     summary: 'List provinces',

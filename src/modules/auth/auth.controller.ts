@@ -17,6 +17,7 @@ import {
   ApiTooManyRequestsResponse,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import { Public } from '../../common/decorators/public.decorator.js';
 import { SENSITIVE_THROTTLE } from '../../common/throttle.js';
 import {
   DEFAULT_ACCESS_TTL_SECONDS,
@@ -51,6 +52,7 @@ export const RESEND_CODE_MESSAGE =
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  @Public()
   @Post('register')
   @ApiOperation({
     summary: 'Register a new user',
@@ -72,6 +74,7 @@ export class AuthController {
     return { message: REGISTER_SUCCESS_MESSAGE, data: user };
   }
 
+  @Public()
   @Post('verify-email')
   @HttpCode(HttpStatus.OK)
   @UseInterceptors(AuthCookiesInterceptor)
@@ -118,6 +121,7 @@ export class AuthController {
     );
   }
 
+  @Public()
   @Post('resend-verification-code')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({

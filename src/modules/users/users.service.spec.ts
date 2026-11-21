@@ -1,4 +1,4 @@
-import { ConflictException, Logger } from '@nestjs/common';
+import { ConflictException, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { UsersService } from './users.service.js';
@@ -161,6 +161,39 @@ describe('UsersService', () => {
   it('returns null for an unknown email', async () => {
     prisma.user.findUnique.mockResolvedValue(null);
     await expect(service.findByEmail('nobody@example.com')).resolves.toBeNull();
+  });
+
+  it('finds a user by id without the password hash', async () => {
+    const createdAt = new Date();
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'u-1',
+      ...profile,
+      status: 'ACTIVE',
+      createdAt,
+    });
+
+    await expect(service.findById('u-1')).resolves.toEqual({
+      id: 'u-1',
+      ...profile,
+      status: 'ACTIVE',
+      createdAt,
+    });
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({
+      where: { id: 'u-1' },
+      select: SELECT,
+    });
+  });
+
+  it('answers 404 USER_NOT_FOUND for an unknown id', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+
+    const err = await service.findById('u-404').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotFoundException);
+    expect((err as NotFoundException).getResponse()).toEqual({
+      statusCode: 404,
+      code: 'USER_NOT_FOUND',
+      message: 'User not found',
+    });
   });
 
   it('activates a user', async () => {
