@@ -28,6 +28,8 @@ describe('AuthService', () => {
     verify: vi.fn(),
     tryStartCooldown: vi.fn(),
     clearCooldown: vi.fn(),
+    tryCountResend: vi.fn(),
+    isLocked: vi.fn(),
   };
   const emailService = { send: vi.fn() };
   const service = new AuthService(
@@ -221,6 +223,20 @@ describe('AuthService', () => {
       expect(usersService.activate).not.toHaveBeenCalled();
     });
 
+    it('answers 429 when the daily attempts are used up', async () => {
+      otpService.verify.mockResolvedValue('locked');
+
+      await expect(errorOf()).resolves.toEqual({
+        status: 429,
+        body: {
+          statusCode: 429,
+          code: 'OTP_VERIFICATION_LOCKED',
+          message: 'Too many failed attempts, please try again later',
+        },
+      });
+      expect(usersService.activate).not.toHaveBeenCalled();
+    });
+
     it('does not mistake other errors for a bad code', async () => {
       const failure = new Error('ECONNREFUSED');
       otpService.verify.mockRejectedValue(failure);
@@ -238,6 +254,60 @@ describe('AuthService', () => {
       usersService.findByEmail.mockResolvedValue(user);
       otpService.tryStartCooldown.mockResolvedValue(true);
       otpService.clearCooldown.mockResolvedValue(undefined);
+      otpService.tryCountResend.mockResolvedValue(true);
+      otpService.isLocked.mockResolvedValue(false);
+    });
+
+    /** Resolves with the HttpException the resend rejects with. */
+    const resendError = async () => {
+      const err = await service
+        .resendVerificationCode(input)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(HttpException);
+      return {
+        status: (err as HttpException).getStatus(),
+        body: (err as HttpException).getResponse(),
+      };
+    };
+
+    it('emails no new code to a locked user', async () => {
+      otpService.isLocked.mockResolvedValue(true);
+
+      await expect(resendError()).resolves.toEqual({
+        status: 429,
+        body: {
+          statusCode: 429,
+          code: 'OTP_VERIFICATION_LOCKED',
+          message: 'Too many failed attempts, please try again later',
+        },
+      });
+      expect(otpService.isLocked).toHaveBeenCalledWith('u-1');
+      expect(otpService.tryStartCooldown).not.toHaveBeenCalled();
+      expect(otpService.issue).not.toHaveBeenCalled();
+      expect(emailService.send).not.toHaveBeenCalled();
+    });
+
+    it('answers 429 past the hourly resend limit and sends nothing', async () => {
+      otpService.tryCountResend.mockResolvedValue(false);
+
+      await expect(resendError()).resolves.toEqual({
+        status: 429,
+        body: {
+          statusCode: 429,
+          code: 'OTP_RESEND_LIMIT_REACHED',
+          message: 'Too many codes requested, please try again later',
+        },
+      });
+      expect(otpService.tryCountResend).toHaveBeenCalledWith('u-1');
+      expect(otpService.issue).not.toHaveBeenCalled();
+      expect(emailService.send).not.toHaveBeenCalled();
+    });
+
+    it('does not count a resend refused by the cooldown', async () => {
+      otpService.tryStartCooldown.mockResolvedValue(false);
+
+      await resendError();
+      expect(otpService.tryCountResend).not.toHaveBeenCalled();
     });
 
     it('issues a new code and emails it with a fresh idempotency key', async () => {
