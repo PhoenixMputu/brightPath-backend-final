@@ -17,6 +17,7 @@ describe('validateEnv', () => {
       NODE_ENV: 'development',
       PORT: 8000,
       PROVINCES_CACHE_TTL_SECONDS: 300,
+      APP_VERSION: 'unknown',
       LOG_LEVEL: 'debug',
       SWAGGER_ENABLED: true,
       CORS_ORIGINS: ['http://localhost:3000', 'https://app.example.com'],

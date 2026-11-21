@@ -13,6 +13,7 @@ import { buildLoggerParams } from './logger.config.js';
         buildLoggerParams({
           NODE_ENV: config.get('NODE_ENV', { infer: true }),
           LOG_LEVEL: config.get('LOG_LEVEL', { infer: true }),
+          APP_VERSION: config.get('APP_VERSION', { infer: true }),
         }),
     }),
   ],
