@@ -5,6 +5,7 @@ import {
   INestApplication,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { configureApp } from '../../app.setup.js';
@@ -14,6 +15,7 @@ import {
   RESEND_CODE_MESSAGE,
   VERIFY_EMAIL_SUCCESS_MESSAGE,
 } from './auth.controller.js';
+import { AuthCookiesInterceptor } from './auth-cookies.interceptor.js';
 import { AuthService } from './auth.service.js';
 
 describe('AuthController', () => {
@@ -36,7 +38,11 @@ describe('AuthController', () => {
     vi.resetAllMocks();
     const moduleRef = await Test.createTestingModule({
       controllers: [AuthController],
-      providers: [{ provide: AuthService, useValue: authService }],
+      providers: [
+        { provide: AuthService, useValue: authService },
+        AuthCookiesInterceptor,
+        { provide: ConfigService, useValue: { get: () => undefined } },
+      ],
     }).compile();
     app = configureApp(moduleRef.createNestApplication());
     await app.init();
@@ -135,22 +141,75 @@ describe('AuthController', () => {
       request(app.getHttpServer()).post('/api/v1/auth/verify-email').send(body);
     const validBody = { email: profile.email, code: '042137' };
 
+    const user = {
+      id: '019a7d2e-4b1c-7a3f-9e2d-1c5b8a6f4e3d',
+      ...profile,
+      status: 'ACTIVE',
+      createdAt: '2026-11-13T15:00:00.000Z',
+    };
+    const tokens = {
+      sessionId: 's-1',
+      accessToken: 'access.jwt.value',
+      refreshToken: 'refresh.jwt.value',
+      accessTtlSeconds: 900,
+      refreshTtlSeconds: 604_800,
+    };
+    const signedIn = { user, tokens };
+
+    /** Set-Cookie lines by cookie name. */
+    const cookiesOf = (res: request.Response) =>
+      Object.fromEntries(
+        ([] as string[])
+          .concat(res.headers['set-cookie'] ?? [])
+          .map((line) => [line.split('=')[0], line]),
+      );
+
     it('verifies the email and answers 200 with the active user', async () => {
-      const user = {
-        id: '019a7d2e-4b1c-7a3f-9e2d-1c5b8a6f4e3d',
-        ...profile,
-        status: 'ACTIVE',
-        createdAt: '2026-11-13T15:00:00.000Z',
-      };
-      authService.verifyEmail.mockResolvedValue(user);
+      authService.verifyEmail.mockResolvedValue(signedIn);
 
       await verify(validBody)
         .expect(200)
         .expect({ message: VERIFY_EMAIL_SUCCESS_MESSAGE, data: user });
     });
 
+    it('sets the access and refresh tokens as secure httpOnly cookies', async () => {
+      authService.verifyEmail.mockResolvedValue(signedIn);
+
+      const res = await verify(validBody).expect(200);
+      const cookies = cookiesOf(res);
+
+      expect(cookies.access_token).toMatch(
+        /^access_token=access\.jwt\.value; Max-Age=900; Path=\/; Expires=[^;]+; HttpOnly; Secure; SameSite=Strict$/,
+      );
+      expect(cookies.refresh_token).toMatch(
+        /^refresh_token=refresh\.jwt\.value; Max-Age=604800; Path=\/api\/v1\/auth; .*HttpOnly; Secure; SameSite=Strict$/,
+      );
+      expect(res.headers['cache-control']).toBe('no-store');
+    });
+
+    it('never puts the tokens in the response body', async () => {
+      authService.verifyEmail.mockResolvedValue(signedIn);
+
+      const res = await verify(validBody).expect(200);
+      expect(res.text).not.toContain(tokens.accessToken);
+      expect(res.text).not.toContain(tokens.refreshToken);
+    });
+
+    it('sets no cookie when the verification fails', async () => {
+      authService.verifyEmail.mockRejectedValue(
+        new BadRequestException({
+          statusCode: 400,
+          code: 'OTP_INVALID',
+          message: 'Verification code is invalid',
+        }),
+      );
+
+      const res = await verify(validBody).expect(400);
+      expect(res.headers['set-cookie']).toBeUndefined();
+    });
+
     it('normalizes the email', async () => {
-      authService.verifyEmail.mockResolvedValue({});
+      authService.verifyEmail.mockResolvedValue(signedIn);
 
       await verify({ ...validBody, email: ' Victory.DEO@Example.com ' }).expect(
         200,

@@ -13,6 +13,7 @@ import { UsersService } from '../users/users.service.js';
 import { AuthService } from './auth.service.js';
 import { OtpService } from './otp.service.js';
 import { PasswordService } from './password.service.js';
+import { TokenService } from './token.service.js';
 
 describe('AuthService', () => {
   const usersService = {
@@ -32,12 +33,21 @@ describe('AuthService', () => {
     isLocked: vi.fn(),
   };
   const emailService = { send: vi.fn() };
+  const tokenService = { issue: vi.fn(), revoke: vi.fn() };
   const service = new AuthService(
     usersService as unknown as UsersService,
     passwordService as unknown as PasswordService,
     otpService as unknown as OtpService,
     emailService as unknown as EmailService,
+    tokenService as unknown as TokenService,
   );
+  const tokens = {
+    sessionId: 's-1',
+    accessToken: 'access.jwt',
+    refreshToken: 'refresh.jwt',
+    accessTtlSeconds: 900,
+    refreshTtlSeconds: 604_800,
+  };
 
   const profile = {
     firstName: 'Victory',
@@ -159,15 +169,77 @@ describe('AuthService', () => {
 
     beforeEach(() => usersService.findByEmail.mockResolvedValue(user));
 
-    it('activates the user when the code is valid', async () => {
+    describe('with a valid code', () => {
       const active = { ...user, status: 'ACTIVE' };
-      otpService.verify.mockResolvedValue('valid');
-      usersService.activate.mockResolvedValue(active);
 
-      await expect(service.verifyEmail(input)).resolves.toBe(active);
-      expect(usersService.findByEmail).toHaveBeenCalledWith(profile.email);
-      expect(otpService.verify).toHaveBeenCalledWith('u-1', '042137');
-      expect(usersService.activate).toHaveBeenCalledWith('u-1');
+      beforeEach(() => {
+        otpService.verify.mockResolvedValue('valid');
+        usersService.activate.mockResolvedValue(active);
+        tokenService.issue.mockResolvedValue(tokens);
+        tokenService.revoke.mockResolvedValue(undefined);
+      });
+
+      it('activates the user and signs them in with a new session', async () => {
+        await expect(service.verifyEmail(input)).resolves.toEqual({
+          user: active,
+          tokens,
+        });
+        expect(usersService.findByEmail).toHaveBeenCalledWith(profile.email);
+        expect(otpService.verify).toHaveBeenCalledWith('u-1', '042137');
+        expect(tokenService.issue).toHaveBeenCalledWith('u-1');
+        expect(usersService.activate).toHaveBeenCalledWith('u-1');
+      });
+
+      it('opens the session before activating the account', async () => {
+        await service.verifyEmail(input);
+        expect(tokenService.issue.mock.invocationCallOrder[0]).toBeLessThan(
+          usersService.activate.mock.invocationCallOrder[0],
+        );
+      });
+
+      it('answers 503 and leaves the account inactive when the session cannot be opened', async () => {
+        tokenService.issue.mockRejectedValue(new Error('ECONNREFUSED'));
+
+        await expect(errorOf()).resolves.toEqual({
+          status: 503,
+          body: {
+            statusCode: 503,
+            code: 'SESSION_NOT_OPENED',
+            message:
+              'Could not sign you in, please request a new verification code',
+          },
+        });
+        expect(usersService.activate).not.toHaveBeenCalled();
+      });
+
+      it('revokes the session when the activation fails', async () => {
+        const failure = new Error('db down');
+        usersService.activate.mockRejectedValue(failure);
+
+        await expect(service.verifyEmail(input)).rejects.toBe(failure);
+        expect(tokenService.revoke).toHaveBeenCalledWith('s-1');
+      });
+
+      it('still reports the activation error, and logs the orphan session, when the revoke fails too', async () => {
+        const failure = new Error('db down');
+        usersService.activate.mockRejectedValue(failure);
+        tokenService.revoke.mockRejectedValue(new Error('ECONNREFUSED'));
+
+        await expect(service.verifyEmail(input)).rejects.toBe(failure);
+        expect(Logger.prototype.error).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: 'u-1', sessionId: 's-1' }),
+          'Session revoke failed, orphan session left until it expires',
+        );
+      });
+    });
+
+    it('opens no session when the code is not valid', async () => {
+      otpService.verify.mockResolvedValue('invalid');
+
+      await expect(service.verifyEmail(input)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(tokenService.issue).not.toHaveBeenCalled();
     });
 
     it('answers an unknown email exactly like a wrong code', async () => {

@@ -6,6 +6,8 @@ const valid = {
   RESEND_API_KEY: 're_test',
   MAIL_FROM: 'BrightPath <noreply@example.com>',
   CORS_ORIGINS: 'http://localhost:3000, https://app.example.com/',
+  JWT_ACCESS_SECRET: 'a'.repeat(32),
+  JWT_REFRESH_SECRET: 'r'.repeat(32),
 };
 
 describe('validateEnv', () => {
@@ -18,7 +20,50 @@ describe('validateEnv', () => {
       LOG_LEVEL: 'debug',
       SWAGGER_ENABLED: true,
       CORS_ORIGINS: ['http://localhost:3000', 'https://app.example.com'],
+      JWT_ACCESS_TTL_SECONDS: 900,
+      JWT_REFRESH_TTL_SECONDS: 604_800,
     });
+  });
+
+  it.each([
+    [
+      'a short access secret',
+      { JWT_ACCESS_SECRET: 'too-short' },
+      'JWT_ACCESS_SECRET',
+    ],
+    [
+      'a short refresh secret',
+      { JWT_REFRESH_SECRET: 'too-short' },
+      'JWT_REFRESH_SECRET',
+    ],
+    [
+      'the same secret twice',
+      { JWT_REFRESH_SECRET: 'a'.repeat(32) },
+      'JWT_REFRESH_SECRET must differ',
+    ],
+    [
+      'a refresh TTL not longer than the access TTL',
+      { JWT_ACCESS_TTL_SECONDS: '900', JWT_REFRESH_TTL_SECONDS: '900' },
+      'JWT_REFRESH_TTL_SECONDS must be longer',
+    ],
+  ])('rejects %s', (_label, override, message) => {
+    expect(() => validateEnv({ ...valid, ...override })).toThrow(message);
+  });
+
+  it('never prints a JWT secret in the error', () => {
+    const secret = 'super-secret-value-that-must-not-leak';
+    let message = '';
+    try {
+      validateEnv({
+        ...valid,
+        JWT_ACCESS_SECRET: secret,
+        JWT_REFRESH_SECRET: secret,
+      });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain('JWT_REFRESH_SECRET must differ');
+    expect(message).not.toContain(secret);
   });
 
   it('parses numbers and drops unknown variables', () => {

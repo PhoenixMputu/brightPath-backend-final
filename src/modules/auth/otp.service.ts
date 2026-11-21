@@ -147,8 +147,11 @@ export class OtpService {
 
     if (!(await this.passwordService.verify(hash, code))) return 'invalid';
 
-    await this.revoke(userId);
-    return 'valid';
+    // DEL is atomic: when two requests send the right code at once, only the
+    // one that actually removes it is valid, so a code opens one session.
+    const consumed = await this.redis.del(otpKey(userId));
+    await this.redis.del(attemptsKey);
+    return consumed === 1 ? 'valid' : 'expired';
   }
 
   /**

@@ -35,6 +35,8 @@ describe('OtpService', () => {
     for (const cmd of [tx.set, tx.del, tx.incr, tx.expire]) {
       cmd.mockReturnValue(tx);
     }
+    // DEL reports one key removed unless a test says otherwise.
+    redis.del.mockResolvedValue(1);
   });
 
   /** Makes the next attempt read `n` on this code and `daily` for the user. */
@@ -109,7 +111,17 @@ describe('OtpService', () => {
 
       await expect(service.verify('u-1', '042137')).resolves.toBe('valid');
       expect(redis.get).toHaveBeenCalledWith(KEY);
-      expect(redis.del).toHaveBeenCalledWith(KEY, ATTEMPTS_KEY);
+      expect(redis.del).toHaveBeenCalledWith(KEY);
+      expect(redis.del).toHaveBeenCalledWith(ATTEMPTS_KEY);
+    });
+
+    it('lets only one of two concurrent right guesses through', async () => {
+      redis.get.mockResolvedValue(hash);
+      attempt(1);
+      // The other request deleted the code between our check and our DEL.
+      redis.del.mockResolvedValueOnce(0);
+
+      await expect(service.verify('u-1', '042137')).resolves.toBe('expired');
     });
 
     it('counts the attempt with a TTL that is not extended', async () => {
