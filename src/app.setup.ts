@@ -1,12 +1,13 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
 import helmet from 'helmet';
+import { API_PREFIX } from './common/api-prefix.js';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
 
 /** HTTP-level configuration shared by main.ts and the tests. */
 export function configureApp(app: INestApplication) {
   app.use(helmet());
-  app.setGlobalPrefix('api/v1');
+  app.setGlobalPrefix(API_PREFIX);
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

@@ -1,4 +1,11 @@
-import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  HttpCode,
+  HttpStatus,
+  Post,
+  UseInterceptors,
+} from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiConflictResponse,
@@ -11,6 +18,17 @@ import {
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { SENSITIVE_THROTTLE } from '../../common/throttle.js';
+import {
+  DEFAULT_ACCESS_TTL_SECONDS,
+  DEFAULT_REFRESH_TTL_SECONDS,
+} from '../../config/env.schema.js';
+import {
+  ACCESS_TOKEN_COOKIE,
+  AuthCookiesResult,
+  REFRESH_TOKEN_COOKIE,
+  REFRESH_TOKEN_COOKIE_PATH,
+} from './auth-cookies.js';
+import { AuthCookiesInterceptor } from './auth-cookies.interceptor.js';
 import { AuthService } from './auth.service.js';
 import { MessageResponseDto } from './dto/message-response.dto.js';
 import { RegisterResponseDto } from './dto/register-response.dto.js';
@@ -56,12 +74,29 @@ export class AuthController {
 
   @Post('verify-email')
   @HttpCode(HttpStatus.OK)
+  @UseInterceptors(AuthCookiesInterceptor)
   @ApiOperation({
     summary: 'Verify the email with the code sent at registration',
     description:
-      'Activates the account. A code allows 5 attempts and is single-use. A user gets at most 15 attempts per 24 hours across all codes.',
+      'Activates the account and signs the user in: the tokens are set as httpOnly cookies, never returned in the body. A code allows 5 attempts and is single-use. A user gets at most 15 attempts per 24 hours across all codes.',
   })
-  @ApiOkResponse({ type: VerifyEmailResponseDto })
+  @ApiOkResponse({
+    type: VerifyEmailResponseDto,
+    headers: {
+      'Set-Cookie': {
+        description: `\`${ACCESS_TOKEN_COOKIE}\` (path /, ${DEFAULT_ACCESS_TTL_SECONDS} s by default) and \`${REFRESH_TOKEN_COOKIE}\` (path ${REFRESH_TOKEN_COOKIE_PATH}, ${DEFAULT_REFRESH_TTL_SECONDS} s by default). Both HttpOnly, Secure, SameSite=Strict.`,
+        schema: { type: 'string' },
+      },
+      'Cache-Control': {
+        description: 'Always `no-store`: the response carries credentials.',
+        schema: { type: 'string', example: 'no-store' },
+      },
+    },
+  })
+  @ApiServiceUnavailableResponse({
+    description:
+      'The code was right but the session could not be opened; the account stays inactive and a new code must be requested. `code` is SESSION_NOT_OPENED.',
+  })
   @ApiBadRequestResponse({
     description:
       'Invalid body, or `code` is OTP_INVALID (wrong code or unknown email) or OTP_EXPIRED.',
@@ -75,9 +110,12 @@ export class AuthController {
   })
   async verifyEmail(
     @Body() dto: VerifyEmailDto,
-  ): Promise<VerifyEmailResponseDto> {
-    const user = await this.authService.verifyEmail(dto);
-    return { message: VERIFY_EMAIL_SUCCESS_MESSAGE, data: user };
+  ): Promise<AuthCookiesResult<VerifyEmailResponseDto>> {
+    const { user, tokens } = await this.authService.verifyEmail(dto);
+    return new AuthCookiesResult(
+      { message: VERIFY_EMAIL_SUCCESS_MESSAGE, data: user },
+      tokens,
+    );
   }
 
   @Post('resend-verification-code')

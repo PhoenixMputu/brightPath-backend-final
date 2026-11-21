@@ -18,7 +18,14 @@ import { ResendVerificationCodeDto } from './dto/resend-verification-code.dto.js
 import { VerifyEmailDto } from './dto/verify-email.dto.js';
 import { OtpService } from './otp.service.js';
 import { PasswordService } from './password.service.js';
+import { type AuthTokens, TokenService } from './token.service.js';
 import { verificationEmail } from './verification-email.js';
+
+/** A user signed in by a new session. */
+export interface AuthenticatedUser {
+  user: UserDto;
+  tokens: AuthTokens;
+}
 
 @Injectable()
 export class AuthService {
@@ -29,6 +36,7 @@ export class AuthService {
     private readonly passwordService: PasswordService,
     private readonly otpService: OtpService,
     private readonly emailService: EmailService,
+    private readonly tokenService: TokenService,
   ) {}
 
   /**
@@ -107,10 +115,10 @@ export class AuthService {
   }
 
   /**
-   * Activates the account when the code matches. An unknown email gets the
-   * same answer as a wrong code.
+   * Activates the account when the code matches and signs the user in with a
+   * new session. An unknown email gets the same answer as a wrong code.
    */
-  async verifyEmail(dto: VerifyEmailDto): Promise<UserDto> {
+  async verifyEmail(dto: VerifyEmailDto): Promise<AuthenticatedUser> {
     const user = await this.usersService.findByEmail(dto.email);
     if (!user) throw invalidCode();
     if (user.status === UserStatus.ACTIVE) {
@@ -124,7 +132,7 @@ export class AuthService {
     const check = await this.otpService.verify(user.id, dto.code);
     switch (check) {
       case 'valid':
-        return this.usersService.activate(user.id);
+        return this.activateAndSignIn(user.id);
       case 'invalid':
         throw invalidCode();
       case 'expired':
@@ -144,6 +152,43 @@ export class AuthService {
         );
       case 'locked':
         throw verificationLocked();
+    }
+  }
+
+  /**
+   * Opens the session before activating: if Redis fails, the account stays
+   * INACTIVE and the user can ask for a new code, instead of being active
+   * with no session and no way to sign in yet. If the activation fails, the
+   * session is revoked so no valid refresh token outlives it.
+   */
+  private async activateAndSignIn(userId: string): Promise<AuthenticatedUser> {
+    let tokens: AuthTokens;
+    try {
+      tokens = await this.tokenService.issue(userId);
+    } catch (err) {
+      this.logger.warn(
+        { err: errorSummary(err), userId },
+        'Session could not be opened',
+      );
+      // The code is already consumed: tell the client to ask for a new one.
+      throw sessionNotOpened();
+    }
+
+    try {
+      const user = await this.usersService.activate(userId);
+      this.logger.log(
+        { userId, sessionId: tokens.sessionId },
+        'Session opened after email verification',
+      );
+      return { user, tokens };
+    } catch (err) {
+      await this.tokenService.revoke(tokens.sessionId).catch((revokeErr) => {
+        this.logger.error(
+          { err: errorSummary(revokeErr), userId, sessionId: tokens.sessionId },
+          'Session revoke failed, orphan session left until it expires',
+        );
+      });
+      throw err;
     }
   }
 
@@ -189,6 +234,14 @@ function verificationLocked(): HttpException {
     },
     HttpStatus.TOO_MANY_REQUESTS,
   );
+}
+
+function sessionNotOpened(): ServiceUnavailableException {
+  return new ServiceUnavailableException({
+    statusCode: 503,
+    code: 'SESSION_NOT_OPENED',
+    message: 'Could not sign you in, please request a new verification code',
+  });
 }
 
 function emailNotSent(): ServiceUnavailableException {

@@ -19,12 +19,17 @@ Object.assign(process.env, {
   RESEND_API_KEY: 're_e2e',
   MAIL_FROM: 'BrightPath <noreply@example.com>',
   CORS_ORIGINS: 'http://localhost:3000',
+  JWT_ACCESS_SECRET: 'e2e-access-secret-at-least-32-characters',
+  JWT_REFRESH_SECRET: 'e2e-refresh-secret-at-least-32-characters',
 });
 
 const { AppModule } = await import('../src/app.module.js');
 const { configureApp } = await import('../src/app.setup.js');
 const { PrismaService } = await import('../src/prisma/prisma.service.js');
 const { REDIS_CLIENT } = await import('../src/redis/redis.constants.js');
+const { EmailService } =
+  await import('../src/integrations/resend/email.service.js');
+const { JwtService } = await import('@nestjs/jwt');
 
 interface Province {
   id: string;
@@ -81,6 +86,9 @@ function fakeRedis() {
       store.set(key, value);
       return Promise.resolve('OK');
     }),
+    del: vi.fn((...keys: string[]) =>
+      Promise.resolve(keys.filter((key) => store.delete(key)).length),
+    ),
     // Throttler script: [totalHits, ttlMs, isBlocked, blockTtlMs].
     eval: vi.fn((_script: string, _n: number, hitsKey: string) =>
       Promise.resolve([incr(hitsKey), 60_000, 0, 0]),
@@ -90,6 +98,14 @@ function fakeRedis() {
       const chain = {
         incr: (key: string) => (ops.push(() => incr(key)), chain),
         expire: () => (ops.push(() => 1), chain),
+        set: (key: string, value: string) => (
+          ops.push(() => (store.set(key, value), 'OK')),
+          chain
+        ),
+        del: (...keys: string[]) => (
+          ops.push(() => keys.filter((key) => store.delete(key)).length),
+          chain
+        ),
         exec: () => Promise.resolve(ops.map((op) => [null, op()])),
       };
       return chain;
@@ -194,5 +210,170 @@ describe('Provinces (e2e)', () => {
 
     expect(res.body).toMatchObject({ statusCode: 404, code: 'NOT_FOUND' });
     expect(res.headers['x-request-id']).toBe('e2e-request-1');
+  });
+});
+
+interface UserRow {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  passwordHash: string;
+  status: 'INACTIVE' | 'ACTIVE';
+  createdAt: Date;
+}
+
+/** Just enough of the Prisma user model for registration and verification. */
+function fakeUsers() {
+  const rows: UserRow[] = [];
+  return {
+    rows,
+    create: vi.fn(
+      ({ data }: { data: Omit<UserRow, 'id' | 'status' | 'createdAt'> }) => {
+        const row: UserRow = {
+          id: `019a7d2e-4b1c-7a3f-9e2d-00000000000${rows.length + 1}`,
+          ...data,
+          status: 'INACTIVE',
+          createdAt: new Date('2026-11-21T10:00:00.000Z'),
+        };
+        rows.push(row);
+        return Promise.resolve(row);
+      },
+    ),
+    findUnique: vi.fn(({ where }: { where: { email: string } }) =>
+      Promise.resolve(rows.find((row) => row.email === where.email) ?? null),
+    ),
+    update: vi.fn(
+      ({ where, data }: { where: { id: string }; data: Partial<UserRow> }) => {
+        const row = rows.find((r) => r.id === where.id);
+        if (!row) return Promise.reject(new Error('Record not found'));
+        Object.assign(row, data);
+        return Promise.resolve(row);
+      },
+    ),
+    delete: vi.fn(),
+  };
+}
+
+describe('Email verification (e2e)', () => {
+  let app: INestApplication<App>;
+  let redis: ReturnType<typeof fakeRedis>;
+  let users: ReturnType<typeof fakeUsers>;
+  const sentEmails: Array<{ to: string; text: string }> = [];
+
+  const profile = {
+    firstName: 'Victory',
+    lastName: 'Deo',
+    email: 'victory.deo@example.com',
+    phone: '+243812345678',
+    password: 'Str0ngPassword',
+  };
+
+  beforeEach(async () => {
+    sentEmails.length = 0;
+    redis = fakeRedis();
+    users = fakeUsers();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(PrismaService)
+      .useValue({ ...fakePrisma([]), user: users })
+      .overrideProvider(REDIS_CLIENT)
+      .useValue(redis)
+      .overrideProvider(EmailService)
+      .useValue({
+        send: vi.fn((email: { to: string; text: string }) => {
+          sentEmails.push(email);
+          return Promise.resolve('email-id');
+        }),
+      })
+      .compile();
+    app = configureApp(moduleRef.createNestApplication());
+    await app.init();
+  });
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  const post = (path: string, body: object) =>
+    request(app.getHttpServer()).post(`/api/v1/auth/${path}`).send(body);
+
+  /** The 6-digit code of the last verification email. */
+  const lastCode = () => /\b(\d{6})\b/.exec(sentEmails.at(-1)?.text ?? '')?.[1];
+
+  const cookiesOf = (res: request.Response) =>
+    Object.fromEntries(
+      ([] as string[]).concat(res.headers['set-cookie'] ?? []).map((line) => {
+        const [pair, ...attributes] = line.split('; ');
+        const [name, value] = pair.split('=');
+        return [name, { value, attributes }];
+      }),
+    );
+
+  it('signs the user in with httpOnly cookies once the email is verified', async () => {
+    await post('register', profile).expect(201);
+    const code = lastCode();
+    expect(code).toMatch(/^\d{6}$/);
+
+    const wrong = code === '000000' ? '111111' : '000000';
+    const rejected = await post('verify-email', {
+      email: profile.email,
+      code: wrong,
+    }).expect(400);
+    expect(rejected.body.code).toBe('OTP_INVALID');
+    expect(rejected.headers['set-cookie']).toBeUndefined();
+
+    const res = await post('verify-email', {
+      email: profile.email,
+      code,
+    }).expect(200);
+
+    expect(res.body).toMatchObject({
+      message: 'Email verified successfully.',
+      data: { email: profile.email, status: 'ACTIVE' },
+    });
+    expect(res.body.data).not.toHaveProperty('passwordHash');
+    expect(res.headers['cache-control']).toBe('no-store');
+
+    const { access_token: access, refresh_token: refresh } = cookiesOf(res);
+    expect(access.attributes).toEqual(
+      expect.arrayContaining([
+        'Path=/',
+        'HttpOnly',
+        'Secure',
+        'SameSite=Strict',
+      ]),
+    );
+    expect(refresh.attributes).toEqual(
+      expect.arrayContaining([
+        'Path=/api/v1/auth',
+        'HttpOnly',
+        'Secure',
+        'SameSite=Strict',
+      ]),
+    );
+    expect(res.text).not.toContain(access.value);
+    expect(res.text).not.toContain(refresh.value);
+
+    const jwt = new JwtService({});
+    const claims = await jwt.verifyAsync<{
+      sub: string;
+      sid: string;
+      typ: string;
+    }>(access.value, { secret: process.env.JWT_ACCESS_SECRET });
+    expect(claims).toMatchObject({ sub: users.rows[0].id, typ: 'access' });
+    await expect(
+      jwt.verifyAsync(refresh.value, {
+        secret: process.env.JWT_REFRESH_SECRET,
+      }),
+    ).resolves.toMatchObject({ sid: claims.sid, typ: 'refresh' });
+
+    const session = redis.store.get(`brightpath:auth:session:${claims.sid}`);
+    expect(session).toBeDefined();
+    expect(session).not.toContain(refresh.value);
+
+    const again = await post('verify-email', { email: profile.email, code });
+    expect(again.status).toBe(409);
+    expect(again.headers['set-cookie']).toBeUndefined();
   });
 });

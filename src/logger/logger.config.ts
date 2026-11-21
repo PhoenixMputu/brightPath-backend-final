@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Params } from 'nestjs-pino';
+import { API_PREFIX } from '../common/api-prefix.js';
 import type { Env } from '../config/env.schema.js';
 
 export const REQUEST_ID_HEADER = 'x-request-id';
 
 /** Health probes hit the API every few seconds: keep them out of HTTP logs. */
-export const HTTP_LOG_IGNORED_PREFIX = '/api/v1/health';
+export const HTTP_LOG_IGNORED_PREFIX = `/${API_PREFIX}/health`;
 
 /**
  * Sensitive fields, censored at the top level, one level deep (`body.password`,
@@ -19,6 +20,8 @@ export const REDACTED_FIELDS = [
   'token',
   'accessToken',
   'refreshToken',
+  'access_token',
+  'refresh_token',
   'otp',
   'pin',
   'authorization',
