@@ -1,10 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { hostname } from 'node:os';
 import type { Params } from 'nestjs-pino';
+import pino from 'pino';
 import { API_PREFIX } from '../common/api-prefix.js';
 import type { Env } from '../config/env.schema.js';
 
 export const REQUEST_ID_HEADER = 'x-request-id';
+
+/** Name of this service in every log line, to tell it apart in Loki. */
+export const SERVICE_NAME = 'brightpath-backend';
 
 /** Health probes hit the API every few seconds: keep them out of HTTP logs. */
 export const HTTP_LOG_IGNORED_PREFIX = `/${API_PREFIX}/health`;
@@ -61,11 +66,27 @@ export function resolveRequestId(
 }
 
 export function buildLoggerParams(
-  env: Pick<Env, 'NODE_ENV' | 'LOG_LEVEL'>,
+  env: Pick<Env, 'NODE_ENV' | 'LOG_LEVEL' | 'APP_VERSION'>,
 ): Params {
   return {
     pinoHttp: {
       level: env.LOG_LEVEL,
+      // Fields on every line, so a log aggregator (Loki, Grafana) can tell
+      // which service, environment and release wrote it.
+      base: {
+        service: SERVICE_NAME,
+        env: env.NODE_ENV,
+        version: env.APP_VERSION,
+        hostname: hostname(),
+        pid: process.pid,
+      },
+      // ISO 8601 ("2026-11-21T10:00:00.000Z") instead of epoch milliseconds.
+      timestamp: pino.stdTimeFunctions.isoTime,
+      formatters: {
+        // "level":"info" instead of "level":30: Grafana detects severity by
+        // name, to color lines and filter by level.
+        level: (label) => ({ level: label }),
+      },
       // JSON everywhere except local development (pino-pretty is a dev
       // dependency only).
       transport:

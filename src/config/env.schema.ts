@@ -39,6 +39,11 @@ export const envSchema = z
 
     /** Defaults to `info` in production and `debug` elsewhere. */
     LOG_LEVEL: z.enum(LOG_LEVELS).optional(),
+    /**
+     * Release in every log line (e.g. a git tag or commit SHA set by CI), so
+     * logs can be tied to a deploy. Defaults to "unknown".
+     */
+    APP_VERSION: z.string().min(1).max(64).default('unknown'),
 
     RESEND_API_KEY: z.string().min(1),
     MAIL_FROM: z.string().min(1),

@@ -4,6 +4,7 @@ import pino from 'pino';
 import {
   REDACT_PATHS,
   REQUEST_ID_HEADER,
+  SERVICE_NAME,
   buildLoggerParams,
   resolveRequestId,
 } from './logger.config.js';
@@ -47,10 +48,12 @@ describe('buildLoggerParams', () => {
     const dev = buildLoggerParams({
       NODE_ENV: 'development',
       LOG_LEVEL: 'debug',
+      APP_VERSION: 'unknown',
     });
     const prod = buildLoggerParams({
       NODE_ENV: 'production',
       LOG_LEVEL: 'info',
+      APP_VERSION: 'unknown',
     });
     expect(dev.pinoHttp).toMatchObject({
       transport: { target: 'pino-pretty' },
@@ -62,7 +65,11 @@ describe('buildLoggerParams', () => {
   });
 
   it('skips health probes in HTTP logs', () => {
-    const params = buildLoggerParams({ NODE_ENV: 'test', LOG_LEVEL: 'info' });
+    const params = buildLoggerParams({
+      NODE_ENV: 'test',
+      LOG_LEVEL: 'info',
+      APP_VERSION: 'unknown',
+    });
     const { ignore } = (
       params.pinoHttp as {
         autoLogging: { ignore: (req: { url?: string }) => boolean };
@@ -71,6 +78,37 @@ describe('buildLoggerParams', () => {
     expect(ignore({ url: '/api/v1/health' })).toBe(true);
     expect(ignore({ url: '/api/v1/health/live' })).toBe(true);
     expect(ignore({ url: '/api/v1/provinces' })).toBe(false);
+  });
+
+  it('writes lines a log aggregator can parse: level name, ISO time, service fields', () => {
+    const lines: string[] = [];
+    const stream = new Writable({
+      write(chunk: Buffer, _enc, done) {
+        lines.push(chunk.toString());
+        done();
+      },
+    });
+    const { level, base, timestamp, formatters } = buildLoggerParams({
+      NODE_ENV: 'production',
+      LOG_LEVEL: 'info',
+      APP_VERSION: '1.4.2',
+    }).pinoHttp as pino.LoggerOptions;
+    const logger = pino({ level, base, timestamp, formatters }, stream);
+
+    logger.warn({ userId: 'u1' }, 'Something happened');
+
+    const line = JSON.parse(lines[0]) as Record<string, unknown>;
+    expect(line).toMatchObject({
+      level: 'warn',
+      service: SERVICE_NAME,
+      env: 'production',
+      version: '1.4.2',
+      userId: 'u1',
+      msg: 'Something happened',
+    });
+    expect(line.time).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect(typeof line.hostname).toBe('string');
+    expect(line.pid).toBe(process.pid);
   });
 });
 
