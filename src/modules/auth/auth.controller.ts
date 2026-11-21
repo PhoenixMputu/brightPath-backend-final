@@ -59,7 +59,7 @@ export class AuthController {
   @ApiOperation({
     summary: 'Verify the email with the code sent at registration',
     description:
-      'Activates the account. A code allows 5 attempts and is single-use.',
+      'Activates the account. A code allows 5 attempts and is single-use. A user gets at most 15 attempts per 24 hours across all codes.',
   })
   @ApiOkResponse({ type: VerifyEmailResponseDto })
   @ApiBadRequestResponse({
@@ -71,7 +71,7 @@ export class AuthController {
   })
   @ApiTooManyRequestsResponse({
     description:
-      'Too many wrong codes; the code is revoked. `code` is OTP_TOO_MANY_ATTEMPTS.',
+      'Too many wrong codes; the code is revoked. `code` is OTP_TOO_MANY_ATTEMPTS (5 attempts on this code, request a new one) or OTP_VERIFICATION_LOCKED (15 attempts in 24 hours, wait).',
   })
   async verifyEmail(
     @Body() dto: VerifyEmailDto,
@@ -85,13 +85,13 @@ export class AuthController {
   @ApiOperation({
     summary: 'Send a new verification code',
     description:
-      'Replaces the current code and resets its attempts. At most one code per minute. Answers the same way for unknown or already verified emails.',
+      'Replaces the current code and resets its 5 attempts (not the daily limit of 15). At most one code per minute and 5 per hour. Answers the same way for unknown or already verified emails.',
   })
   @ApiOkResponse({ type: MessageResponseDto })
   @ApiBadRequestResponse({ description: 'Invalid request body.' })
   @ApiTooManyRequestsResponse({
     description:
-      'A code was sent less than a minute ago. `code` is OTP_RESEND_TOO_SOON.',
+      '`code` is OTP_RESEND_TOO_SOON (a code was sent less than a minute ago), OTP_RESEND_LIMIT_REACHED (5 codes in the last hour) or OTP_VERIFICATION_LOCKED (15 failed attempts in 24 hours).',
   })
   @ApiServiceUnavailableResponse({
     description:

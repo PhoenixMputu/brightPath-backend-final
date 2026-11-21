@@ -66,12 +66,26 @@ export class AuthService {
     const user = await this.usersService.findByEmail(dto.email);
     if (!user || user.status !== UserStatus.INACTIVE) return;
 
+    // A locked user cannot use a new code anyway: do not email one.
+    if (await this.otpService.isLocked(user.id)) throw verificationLocked();
+
     if (!(await this.otpService.tryStartCooldown(user.id))) {
       throw new HttpException(
         {
           statusCode: 429,
           code: 'OTP_RESEND_TOO_SOON',
           message: 'A code was sent recently, please wait before asking again',
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    if (!(await this.otpService.tryCountResend(user.id))) {
+      throw new HttpException(
+        {
+          statusCode: 429,
+          code: 'OTP_RESEND_LIMIT_REACHED',
+          message: 'Too many codes requested, please try again later',
         },
         HttpStatus.TOO_MANY_REQUESTS,
       );
@@ -128,6 +142,8 @@ export class AuthService {
           },
           HttpStatus.TOO_MANY_REQUESTS,
         );
+      case 'locked':
+        throw verificationLocked();
     }
   }
 
@@ -162,6 +178,17 @@ function invalidCode(): BadRequestException {
     code: 'OTP_INVALID',
     message: 'Verification code is invalid',
   });
+}
+
+function verificationLocked(): HttpException {
+  return new HttpException(
+    {
+      statusCode: 429,
+      code: 'OTP_VERIFICATION_LOCKED',
+      message: 'Too many failed attempts, please try again later',
+    },
+    HttpStatus.TOO_MANY_REQUESTS,
+  );
 }
 
 function emailNotSent(): ServiceUnavailableException {
