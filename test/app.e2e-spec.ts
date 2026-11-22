@@ -30,6 +30,7 @@ const { REDIS_CLIENT } = await import('../src/redis/redis.constants.js');
 const { EmailService } =
   await import('../src/integrations/resend/email.service.js');
 const { JwtService } = await import('@nestjs/jwt');
+const { Prisma } = await import('../src/generated/prisma/client.js');
 const { setupSwagger } = await import('../src/swagger.js');
 const { ROTATE_SESSION_SCRIPT } =
   await import('../src/modules/auth/token.service.js');
@@ -269,18 +270,46 @@ interface UserRow {
   lastName: string;
   email: string;
   phone: string;
+  provinceId: string;
+  city: string;
   passwordHash: string;
   status: 'INACTIVE' | 'ACTIVE';
   createdAt: Date;
 }
 
-/** Just enough of the Prisma user model for registration and verification. */
-function fakeUsers() {
+/**
+ * Just enough of the Prisma user model for registration and verification,
+ * with the province foreign key and relation.
+ */
+function fakeUsers(provinces: Province[]) {
   const rows: UserRow[] = [];
+  const withProvince = (row: UserRow | undefined) =>
+    row && {
+      ...row,
+      province: provinces.find((p) => p.id === row.provinceId),
+    };
   return {
     rows,
     create: vi.fn(
       ({ data }: { data: Omit<UserRow, 'id' | 'status' | 'createdAt'> }) => {
+        // Unique indexes are not modelled; the error is shaped like the pg
+        // adapter's foreign key violation.
+        if (!provinces.some((p) => p.id === data.provinceId)) {
+          return Promise.reject(
+            new Prisma.PrismaClientKnownRequestError(
+              'Foreign key constraint violated',
+              {
+                code: 'P2003',
+                clientVersion: 'e2e',
+                meta: {
+                  driverAdapterError: {
+                    cause: { constraint: { index: 'users_province_id_fkey' } },
+                  },
+                },
+              },
+            ),
+          );
+        }
         const row: UserRow = {
           id: `019a7d2e-4b1c-7a3f-9e2d-00000000000${rows.length + 1}`,
           ...data,
@@ -288,13 +317,15 @@ function fakeUsers() {
           createdAt: new Date('2026-11-21T10:00:00.000Z'),
         };
         rows.push(row);
-        return Promise.resolve(row);
+        return Promise.resolve(withProvince(row));
       },
     ),
     findUnique: vi.fn(({ where }: { where: { email?: string; id?: string } }) =>
       Promise.resolve(
-        rows.find((row) =>
-          where.id ? row.id === where.id : row.email === where.email,
+        withProvince(
+          rows.find((row) =>
+            where.id ? row.id === where.id : row.email === where.email,
+          ),
         ) ?? null,
       ),
     ),
@@ -303,7 +334,7 @@ function fakeUsers() {
         const row = rows.find((r) => r.id === where.id);
         if (!row) return Promise.reject(new Error('Record not found'));
         Object.assign(row, data);
-        return Promise.resolve(row);
+        return Promise.resolve(withProvince(row));
       },
     ),
     delete: vi.fn(),
@@ -316,21 +347,27 @@ describe('Email verification (e2e)', () => {
   let users: ReturnType<typeof fakeUsers>;
   const sentEmails: Array<{ to: string; text: string }> = [];
 
+  const province = {
+    id: '019a6b1c-2d3e-7f40-8a51-6b7c8d9e0f12',
+    name: 'Haut-Katanga',
+  };
   const profile = {
     firstName: 'Victory',
     lastName: 'Deo',
     email: 'victory.deo@example.com',
     phone: '+243812345678',
+    provinceId: province.id,
+    city: 'Lubumbashi',
     password: 'Str0ngPassword',
   };
 
   beforeEach(async () => {
     sentEmails.length = 0;
     redis = fakeRedis();
-    users = fakeUsers();
+    users = fakeUsers([province]);
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(PrismaService)
-      .useValue({ ...fakePrisma([]), user: users })
+      .useValue({ ...fakePrisma([province]), user: users })
       .overrideProvider(REDIS_CLIENT)
       .useValue(redis)
       .overrideProvider(EmailService)
@@ -384,8 +421,14 @@ describe('Email verification (e2e)', () => {
 
     expect(res.body).toMatchObject({
       message: 'Email verified successfully.',
-      data: { email: profile.email, status: 'ACTIVE' },
+      data: {
+        email: profile.email,
+        province,
+        city: 'Lubumbashi',
+        status: 'ACTIVE',
+      },
     });
+    expect(res.body.data).not.toHaveProperty('provinceId');
     expect(res.body.data).not.toHaveProperty('passwordHash');
     expect(res.headers['cache-control']).toBe('no-store');
 
@@ -471,6 +514,21 @@ describe('Email verification (e2e)', () => {
       ? req.set('Cookie', `refresh_token=${refreshToken}`)
       : req;
   };
+
+  it('refuses to register with an unknown province, and sends no email', async () => {
+    const res = await post('register', {
+      ...profile,
+      provinceId: '019a6b1c-2d3e-7f40-8a51-000000000000',
+    }).expect(400);
+
+    expect(res.body).toEqual({
+      statusCode: 400,
+      code: 'PROVINCE_NOT_FOUND',
+      message: 'Province not found',
+    });
+    expect(users.rows).toHaveLength(0);
+    expect(sentEmails).toHaveLength(0);
+  });
 
   it('rotates the refresh token and revokes the session when an old one is reused', async () => {
     const first = await signUp();

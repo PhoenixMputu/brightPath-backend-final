@@ -50,7 +50,11 @@ describe('AuthController', () => {
     email: 'victory.deo@example.com',
     phone: '+243812345678',
   };
-  const valid = { ...profile, password: 'Str0ngPassword' };
+  const location = {
+    provinceId: '019a6b1c-2d3e-7f40-8a51-6b7c8d9e0f12',
+    city: 'Lubumbashi',
+  };
+  const valid = { ...profile, ...location, password: 'Str0ngPassword' };
 
   beforeEach(async () => {
     vi.resetAllMocks();
@@ -88,7 +92,7 @@ describe('AuthController', () => {
       .expect({ message: REGISTER_SUCCESS_MESSAGE, data: user });
   });
 
-  it('normalizes the email, the names and the phone before registering', async () => {
+  it('normalizes the email, the names, the phone and the city before registering', async () => {
     authService.register.mockResolvedValue({});
 
     await register({
@@ -96,10 +100,24 @@ describe('AuthController', () => {
       lastName: ' Deo ',
       email: '  Victory.DEO@Example.com ',
       phone: '+243 (81) 234-56.78',
+      provinceId: location.provinceId,
+      city: '  Lubumbashi ',
       password: 'Str0ngPassword',
     }).expect(201);
 
     expect(authService.register).toHaveBeenCalledWith(valid);
+  });
+
+  it('accepts a city at the maximum length and an uppercase province id', async () => {
+    authService.register.mockResolvedValue({});
+    const body = {
+      ...valid,
+      provinceId: location.provinceId.toUpperCase(),
+      city: 'x'.repeat(100),
+    };
+
+    await register(body).expect(201);
+    expect(authService.register).toHaveBeenCalledWith(body);
   });
 
   it('keeps the password exactly as submitted (no trimming)', async () => {
@@ -121,7 +139,13 @@ describe('AuthController', () => {
     ['phone with letters', { ...valid, phone: '+24381234ABCD' }],
     ['impossible phone number', { ...valid, phone: '+2431' }],
     ['unknown field', { ...valid, role: 'admin' }],
-    ['missing password', { ...profile }],
+    ['missing password', { ...profile, ...location }],
+    ['missing provinceId', { ...valid, provinceId: undefined }],
+    ['provinceId that is not a uuid', { ...valid, provinceId: 'kinshasa' }],
+    ['missing city', { ...valid, city: undefined }],
+    ['blank city', { ...valid, city: '   ' }],
+    ['too long city', { ...valid, city: 'x'.repeat(101) }],
+    ['non-string city', { ...valid, city: 42 }],
     ['password too short', { ...valid, password: 'Ab1defg' }],
     ['password without uppercase', { ...valid, password: 'str0ngpassword' }],
     ['password without lowercase', { ...valid, password: 'STR0NGPASSWORD' }],

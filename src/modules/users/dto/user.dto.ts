@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { UserStatus } from '../../../generated/prisma/enums.js';
+import { UserProvinceDto } from './user-province.dto.js';
 
 export class UserDto {
   @ApiProperty({
@@ -19,6 +20,12 @@ export class UserDto {
 
   @ApiProperty({ example: '+243812345678' })
   phone: string;
+
+  @ApiProperty({ type: UserProvinceDto })
+  province: UserProvinceDto;
+
+  @ApiProperty({ example: 'Lubumbashi' })
+  city: string;
 
   @ApiProperty({
     enum: UserStatus,
