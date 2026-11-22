@@ -21,6 +21,7 @@ describe('AuthService', () => {
     delete: vi.fn(),
     findByEmail: vi.fn(),
     activate: vi.fn(),
+    isActive: vi.fn(),
   };
   const passwordService = { hash: vi.fn(), verify: vi.fn() };
   const otpService = {
@@ -33,7 +34,7 @@ describe('AuthService', () => {
     isLocked: vi.fn(),
   };
   const emailService = { send: vi.fn() };
-  const tokenService = { issue: vi.fn(), revoke: vi.fn() };
+  const tokenService = { issue: vi.fn(), revoke: vi.fn(), rotate: vi.fn() };
   const service = new AuthService(
     usersService as unknown as UsersService,
     passwordService as unknown as PasswordService,
@@ -457,6 +458,70 @@ describe('AuthService', () => {
       expect(err).toBeInstanceOf(ServiceUnavailableException);
       expect(emailService.send).not.toHaveBeenCalled();
       expect(otpService.clearCooldown).toHaveBeenCalledWith('u-1');
+    });
+  });
+
+  describe('refresh', () => {
+    const session = { userId: 'u-1', sessionId: 's-1', refreshToken: 'r.jwt' };
+    const invalid = {
+      status: 401,
+      body: {
+        statusCode: 401,
+        code: 'REFRESH_TOKEN_INVALID',
+        message: 'Session expired, please sign in again',
+      },
+    };
+    const errorOf = async () => {
+      const err = await service.refresh(session).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(HttpException);
+      return {
+        status: (err as HttpException).getStatus(),
+        body: (err as HttpException).getResponse(),
+      };
+    };
+
+    beforeEach(() => usersService.isActive.mockResolvedValue(true));
+
+    it('returns the rotated tokens of the same session', async () => {
+      tokenService.rotate.mockResolvedValue({ status: 'rotated', tokens });
+
+      await expect(service.refresh(session)).resolves.toBe(tokens);
+      expect(usersService.isActive).toHaveBeenCalledWith('u-1');
+      expect(tokenService.rotate).toHaveBeenCalledWith('u-1', 's-1', 'r.jwt');
+      expect(tokenService.revoke).not.toHaveBeenCalled();
+    });
+
+    it('answers 401 when the session is gone', async () => {
+      tokenService.rotate.mockResolvedValue({ status: 'unknown' });
+      await expect(errorOf()).resolves.toEqual(invalid);
+    });
+
+    it('answers 401 and logs a warning when the token was already used', async () => {
+      tokenService.rotate.mockResolvedValue({ status: 'reused' });
+
+      await expect(errorOf()).resolves.toEqual(invalid);
+      expect(Logger.prototype.warn).toHaveBeenCalledWith(
+        { userId: 'u-1', sessionId: 's-1' },
+        'Refresh token reuse detected, session revoked',
+      );
+    });
+
+    it('revokes the session and answers 401 when the account is not active', async () => {
+      usersService.isActive.mockResolvedValue(false);
+
+      await expect(errorOf()).resolves.toEqual(invalid);
+      expect(tokenService.revoke).toHaveBeenCalledWith('s-1');
+      expect(tokenService.rotate).not.toHaveBeenCalled();
+      expect(Logger.prototype.warn).toHaveBeenCalledWith(
+        { userId: 'u-1', sessionId: 's-1' },
+        'Refresh refused, account not active',
+      );
+    });
+
+    it('lets a Redis failure through instead of signing the user out', async () => {
+      const failure = new Error('ECONNREFUSED');
+      tokenService.rotate.mockRejectedValue(failure);
+      await expect(service.refresh(session)).rejects.toBe(failure);
     });
   });
 });

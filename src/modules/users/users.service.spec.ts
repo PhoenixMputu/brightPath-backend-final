@@ -213,4 +213,18 @@ describe('UsersService', () => {
       select: SELECT,
     });
   });
+
+  it.each([
+    ['an active user', { status: 'ACTIVE' }, true],
+    ['an inactive user', { status: 'INACTIVE' }, false],
+    ['an unknown user', null, false],
+  ])('tells whether %s is active', async (_label, row, expected) => {
+    prisma.user.findUnique.mockResolvedValue(row);
+
+    await expect(service.isActive('u-1')).resolves.toBe(expected);
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({
+      where: { id: 'u-1' },
+      select: { status: true },
+    });
+  });
 });

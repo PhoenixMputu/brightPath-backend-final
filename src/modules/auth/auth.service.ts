@@ -18,6 +18,8 @@ import { ResendVerificationCodeDto } from './dto/resend-verification-code.dto.js
 import { VerifyEmailDto } from './dto/verify-email.dto.js';
 import { OtpService } from './otp.service.js';
 import { PasswordService } from './password.service.js';
+import { refreshTokenInvalid } from './refresh-token-invalid.js';
+import type { RefreshSession } from './strategies/jwt-refresh.strategy.js';
 import { type AuthTokens, TokenService } from './token.service.js';
 import { verificationEmail } from './verification-email.js';
 
@@ -152,6 +154,51 @@ export class AuthService {
         );
       case 'locked':
         throw verificationLocked();
+    }
+  }
+
+  /**
+   * Swaps a verified refresh token for a new pair in the same session.
+   *
+   * Refused with 401 REFRESH_TOKEN_INVALID when the account is no longer
+   * active (the session is revoked), when the session is gone, or when the
+   * token was already rotated: that reuse means it was stolen or replayed,
+   * so the whole session is revoked and must sign in again.
+   */
+  async refresh(session: RefreshSession): Promise<AuthTokens> {
+    const { userId, sessionId, refreshToken } = session;
+
+    if (!(await this.usersService.isActive(userId))) {
+      await this.tokenService.revoke(sessionId);
+      this.logger.warn(
+        { userId, sessionId },
+        'Refresh refused, account not active',
+      );
+      throw refreshTokenInvalid();
+    }
+
+    const result = await this.tokenService.rotate(
+      userId,
+      sessionId,
+      refreshToken,
+    );
+    switch (result.status) {
+      case 'rotated':
+        this.logger.log({ userId, sessionId }, 'Session refreshed');
+        return result.tokens;
+      case 'reused':
+        this.logger.warn(
+          { userId, sessionId },
+          'Refresh token reuse detected, session revoked',
+        );
+        throw refreshTokenInvalid();
+      case 'unknown':
+        // Normal after a logout, an expiry or a reuse revocation.
+        this.logger.debug(
+          { userId, sessionId },
+          'Refresh refused, session unknown',
+        );
+        throw refreshTokenInvalid();
     }
   }
 

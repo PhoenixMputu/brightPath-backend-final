@@ -4,6 +4,7 @@ import {
   HttpCode,
   HttpStatus,
   Post,
+  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import {
@@ -15,6 +16,7 @@ import {
   ApiServiceUnavailableResponse,
   ApiTags,
   ApiTooManyRequestsResponse,
+  ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Public } from '../../common/decorators/public.decorator.js';
@@ -31,20 +33,37 @@ import {
 } from './auth-cookies.js';
 import { AuthCookiesInterceptor } from './auth-cookies.interceptor.js';
 import { AuthService } from './auth.service.js';
+import { CurrentRefreshSession } from './decorators/current-refresh-session.decorator.js';
 import { MessageResponseDto } from './dto/message-response.dto.js';
 import { RegisterResponseDto } from './dto/register-response.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
 import { ResendVerificationCodeDto } from './dto/resend-verification-code.dto.js';
 import { VerifyEmailResponseDto } from './dto/verify-email-response.dto.js';
 import { VerifyEmailDto } from './dto/verify-email.dto.js';
+import { JwtRefreshGuard } from './guards/jwt-refresh.guard.js';
+import type { RefreshSession } from './strategies/jwt-refresh.strategy.js';
 
 export const REGISTER_SUCCESS_MESSAGE =
   'User registered successfully. A verification code has been sent by email.';
 
 export const VERIFY_EMAIL_SUCCESS_MESSAGE = 'Email verified successfully.';
 
+export const REFRESH_SUCCESS_MESSAGE = 'Session refreshed successfully.';
+
 export const RESEND_CODE_MESSAGE =
   'If this email belongs to an unverified account, a new code has been sent.';
+
+/** Response headers of every route that sets the auth cookies. */
+const AUTH_COOKIE_HEADERS = {
+  'Set-Cookie': {
+    description: `\`${ACCESS_TOKEN_COOKIE}\` (path /, ${DEFAULT_ACCESS_TTL_SECONDS} s by default) and \`${REFRESH_TOKEN_COOKIE}\` (path ${REFRESH_TOKEN_COOKIE_PATH}, ${DEFAULT_REFRESH_TTL_SECONDS} s by default). Both HttpOnly, Secure, SameSite=Strict.`,
+    schema: { type: 'string' },
+  },
+  'Cache-Control': {
+    description: 'Always `no-store`: the response carries credentials.',
+    schema: { type: 'string', example: 'no-store' },
+  },
+};
 
 @ApiTags('auth')
 @Throttle({ default: SENSITIVE_THROTTLE })
@@ -85,16 +104,7 @@ export class AuthController {
   })
   @ApiOkResponse({
     type: VerifyEmailResponseDto,
-    headers: {
-      'Set-Cookie': {
-        description: `\`${ACCESS_TOKEN_COOKIE}\` (path /, ${DEFAULT_ACCESS_TTL_SECONDS} s by default) and \`${REFRESH_TOKEN_COOKIE}\` (path ${REFRESH_TOKEN_COOKIE_PATH}, ${DEFAULT_REFRESH_TTL_SECONDS} s by default). Both HttpOnly, Secure, SameSite=Strict.`,
-        schema: { type: 'string' },
-      },
-      'Cache-Control': {
-        description: 'Always `no-store`: the response carries credentials.',
-        schema: { type: 'string', example: 'no-store' },
-      },
-    },
+    headers: AUTH_COOKIE_HEADERS,
   })
   @ApiServiceUnavailableResponse({
     description:
@@ -144,5 +154,31 @@ export class AuthController {
   ): Promise<MessageResponseDto> {
     await this.authService.resendVerificationCode(dto);
     return { message: RESEND_CODE_MESSAGE };
+  }
+
+  // Public for the global access-token guard (the access token is usually
+  // expired here); JwtRefreshGuard checks the refresh cookie instead.
+  @Public()
+  @UseGuards(JwtRefreshGuard)
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(AuthCookiesInterceptor)
+  @ApiOperation({
+    summary: 'Refresh the session',
+    description: `Reads the \`${REFRESH_TOKEN_COOKIE}\` cookie and sets a new pair of cookies in the same session. The refresh token is single-use: presenting an already used one revokes the whole session. Call it when a request answers 401 ACCESS_TOKEN_EXPIRED, and never twice in parallel.`,
+  })
+  @ApiOkResponse({ type: MessageResponseDto, headers: AUTH_COOKIE_HEADERS })
+  @ApiUnauthorizedResponse({
+    description:
+      'Missing, expired, invalid, revoked or reused refresh token, or the account is no longer active: sign in again. `code` is REFRESH_TOKEN_INVALID.',
+  })
+  @ApiTooManyRequestsResponse({
+    description: 'Rate limit exceeded. `code` is TOO_MANY_REQUESTS.',
+  })
+  async refresh(
+    @CurrentRefreshSession() session: RefreshSession,
+  ): Promise<AuthCookiesResult<MessageResponseDto>> {
+    const tokens = await this.authService.refresh(session);
+    return new AuthCookiesResult({ message: REFRESH_SUCCESS_MESSAGE }, tokens);
   }
 }

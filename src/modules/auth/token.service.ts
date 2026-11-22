@@ -23,6 +23,19 @@ export interface AuthTokens {
   refreshTtlSeconds: number;
 }
 
+/**
+ * Outcome of a rotation:
+ * - `rotated`: the presented token was the current one; here is the new pair.
+ * - `unknown`: no such session (expired, revoked or never existed).
+ * - `reused`: the session exists but the token is an older one. It was
+ *   already rotated, so it has been stolen or replayed: the session is
+ *   revoked.
+ */
+export type RotationResult =
+  | { status: 'rotated'; tokens: AuthTokens }
+  | { status: 'unknown' }
+  | { status: 'reused' };
+
 /** What Redis keeps per session: never the refresh token itself. */
 interface StoredSession {
   userId: string;
@@ -42,10 +55,47 @@ export function hashRefreshToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
+/** The one place a session is serialized. */
+function serializeSession(userId: string, refreshToken: string): string {
+  const session: StoredSession = {
+    userId,
+    refreshTokenHash: hashRefreshToken(refreshToken),
+  };
+  return JSON.stringify(session);
+}
+
 /**
- * Issues the access and refresh JWTs of a new session. The session lives in
- * Redis for as long as the refresh token, so it can be revoked server-side
- * (logout, rotation) before the token expires.
+ * Compare-and-set of a session, atomic in Redis so two concurrent refreshes
+ * with the same token cannot both succeed. Only `userId` and
+ * `refreshTokenHash` are compared, so adding a field to the session later
+ * does not invalidate the sessions already stored.
+ *
+ * KEYS[1] session key; ARGV[1] user id; ARGV[2] hash of the presented token;
+ * ARGV[3] new session value; ARGV[4] TTL in seconds.
+ * Returns 1 rotated, 0 unknown, -1 reused or unreadable (session deleted).
+ *
+ * Any mismatch counts as reuse, including a client retrying after a lost
+ * response or two tabs refreshing at once: the frontend must run a single
+ * refresh at a time.
+ */
+export const ROTATE_SESSION_SCRIPT = `
+local current = redis.call('GET', KEYS[1])
+if not current then return 0 end
+local ok, session = pcall(cjson.decode, current)
+if not ok or type(session) ~= 'table'
+  or session.userId ~= ARGV[1]
+  or session.refreshTokenHash ~= ARGV[2] then
+  redis.call('DEL', KEYS[1])
+  return -1
+end
+redis.call('SET', KEYS[1], ARGV[3], 'EX', ARGV[4])
+return 1
+`;
+
+/**
+ * Issues and rotates the access and refresh JWTs of a session. The session
+ * lives in Redis for as long as its refresh token, so it can be revoked
+ * server-side (logout, rotation, reuse) before the token expires.
  */
 @Injectable()
 export class TokenService {
@@ -56,7 +106,53 @@ export class TokenService {
   ) {}
 
   async issue(userId: string): Promise<AuthTokens> {
-    const sessionId = randomUUID();
+    const tokens = await this.signPair(userId, randomUUID());
+    await this.redis.set(
+      sessionKey(tokens.sessionId),
+      serializeSession(userId, tokens.refreshToken),
+      'EX',
+      tokens.refreshTtlSeconds,
+    );
+    return tokens;
+  }
+
+  /**
+   * Swaps the presented refresh token for a new pair in the same session.
+   * The previous refresh token stops working at once, and the session gets
+   * a full refresh lifetime again (sliding session).
+   *
+   * The token must already be verified (signature, expiry, `typ`) by the
+   * refresh strategy; this checks it is still the session's current one.
+   */
+  async rotate(
+    userId: string,
+    sessionId: string,
+    presentedRefreshToken: string,
+  ): Promise<RotationResult> {
+    const tokens = await this.signPair(userId, sessionId);
+    const outcome = await this.redis.eval(
+      ROTATE_SESSION_SCRIPT,
+      1,
+      sessionKey(sessionId),
+      userId,
+      hashRefreshToken(presentedRefreshToken),
+      serializeSession(userId, tokens.refreshToken),
+      tokens.refreshTtlSeconds,
+    );
+    if (outcome === 1) return { status: 'rotated', tokens };
+    if (outcome === -1) return { status: 'reused' };
+    return { status: 'unknown' };
+  }
+
+  /** Ends a session: its refresh token can no longer be used. */
+  async revoke(sessionId: string): Promise<void> {
+    await this.redis.del(sessionKey(sessionId));
+  }
+
+  private async signPair(
+    userId: string,
+    sessionId: string,
+  ): Promise<AuthTokens> {
     const accessTtlSeconds = this.config.get('JWT_ACCESS_TTL_SECONDS', {
       infer: true,
     });
@@ -77,17 +173,6 @@ export class TokenService {
       ),
     ]);
 
-    const session: StoredSession = {
-      userId,
-      refreshTokenHash: hashRefreshToken(refreshToken),
-    };
-    await this.redis.set(
-      sessionKey(sessionId),
-      JSON.stringify(session),
-      'EX',
-      refreshTtlSeconds,
-    );
-
     return {
       sessionId,
       accessToken,
@@ -95,11 +180,6 @@ export class TokenService {
       accessTtlSeconds,
       refreshTtlSeconds,
     };
-  }
-
-  /** Ends a session: its refresh token can no longer be used. */
-  async revoke(sessionId: string): Promise<void> {
-    await this.redis.del(sessionKey(sessionId));
   }
 
   private sign(
