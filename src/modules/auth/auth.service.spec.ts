@@ -55,6 +55,8 @@ describe('AuthService', () => {
     lastName: 'Deo',
     email: 'victory.deo@example.com',
     phone: '+243812345678',
+    provinceId: '019a6b1c-2d3e-7f40-8a51-6b7c8d9e0f12',
+    city: 'Lubumbashi',
   };
   const dto = { ...profile, password: 'Str0ngPassword' };
   const user = {

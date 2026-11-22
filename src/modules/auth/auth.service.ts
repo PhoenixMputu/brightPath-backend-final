@@ -54,6 +54,8 @@ export class AuthService {
       lastName: dto.lastName,
       email: dto.email,
       phone: dto.phone,
+      provinceId: dto.provinceId,
+      city: dto.city,
       passwordHash,
     });
 

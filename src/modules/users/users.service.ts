@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -14,6 +15,8 @@ export interface CreateUserInput {
   lastName: string;
   email: string;
   phone: string;
+  provinceId: string;
+  city: string;
   /** Already hashed by the caller: this service never sees a plain password. */
   passwordHash: string;
 }
@@ -28,6 +31,9 @@ const USER_SELECT = {
   lastName: true,
   email: true,
   phone: true,
+  city: true,
+  // Read through the relation on purpose: one query instead of two.
+  province: { select: { id: true, name: true } },
   status: true,
   createdAt: true,
 } satisfies Prisma.UserSelect;
@@ -41,6 +47,8 @@ function toUserDto(user: SelectedUser): UserDto {
     lastName: user.lastName,
     email: user.email,
     phone: user.phone,
+    province: { id: user.province.id, name: user.province.name },
+    city: user.city,
     status: user.status,
     createdAt: user.createdAt,
   };
@@ -53,8 +61,9 @@ export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Inserts directly and relies on the unique indexes rather than checking
-   * first: a check-then-insert would still race with a concurrent signup.
+   * Inserts directly and relies on the unique indexes and the province
+   * foreign key rather than checking first: a check-then-insert would still
+   * race with a concurrent signup.
    */
   async create(input: CreateUserInput): Promise<UserDto> {
     try {
@@ -66,8 +75,10 @@ export class UsersService {
           lastName: input.lastName,
           email: input.email,
           phone: input.phone,
+          provinceId: input.provinceId,
+          city: input.city,
           passwordHash: input.passwordHash,
-        } satisfies Prisma.UserCreateInput,
+        } satisfies Prisma.UserUncheckedCreateInput,
         select: USER_SELECT,
       });
       this.logger.log({ userId: user.id }, 'User created');
@@ -75,6 +86,13 @@ export class UsersService {
     } catch (err) {
       if (isUniqueConstraintError(err)) {
         throw await this.conflictFor(input);
+      }
+      if (violatesConstraint(err, PROVINCE_FOREIGN_KEY)) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'PROVINCE_NOT_FOUND',
+          message: 'Province not found',
+        });
       }
       throw err;
     }
@@ -154,6 +172,27 @@ function isUniqueConstraintError(err: unknown): boolean {
   return (
     err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'
   );
+}
+
+/** Name PostgreSQL gives the users -> province foreign key (see migration). */
+const PROVINCE_FOREIGN_KEY = 'users_province_id_fkey';
+
+/**
+ * True for a foreign key violation (P2003) on that constraint only, so a
+ * foreign key added to users later is not reported as a missing province.
+ * With the pg driver adapter, the constraint is in
+ * `meta.driverAdapterError.cause.constraint.index`.
+ */
+function violatesConstraint(err: unknown, constraint: string): boolean {
+  if (
+    !(err instanceof Prisma.PrismaClientKnownRequestError) ||
+    err.code !== 'P2003'
+  ) {
+    return false;
+  }
+  const driverError = err.meta?.driverAdapterError as
+    { cause?: { constraint?: { index?: unknown } } } | undefined;
+  return driverError?.cause?.constraint?.index === constraint;
 }
 
 function conflict(code: string, message: string): ConflictException {

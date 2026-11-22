@@ -1,4 +1,9 @@
-import { ConflictException, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { UsersService } from './users.service.js';
@@ -21,7 +26,29 @@ describe('UsersService', () => {
     email: 'victory.deo@example.com',
     phone: '+243812345678',
   };
-  const input = { ...profile, passwordHash: '$argon2id$hash' };
+  const province = {
+    id: '019a6b1c-2d3e-7f40-8a51-6b7c8d9e0f12',
+    name: 'Haut-Katanga',
+  };
+  const city = 'Lubumbashi';
+  const input = {
+    ...profile,
+    provinceId: province.id,
+    city,
+    passwordHash: '$argon2id$hash',
+  };
+  /** What USER_SELECT reads: the province comes as a relation. */
+  const SELECT = {
+    id: true,
+    firstName: true,
+    lastName: true,
+    email: true,
+    phone: true,
+    city: true,
+    province: { select: { id: true, name: true } },
+    status: true,
+    createdAt: true,
+  };
 
   const uniqueViolation = () =>
     new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
@@ -47,6 +74,7 @@ describe('UsersService', () => {
     prisma.user.create.mockResolvedValue({
       id: 'u-1',
       ...input,
+      province,
       status: 'INACTIVE',
       createdAt,
     });
@@ -56,21 +84,16 @@ describe('UsersService', () => {
     expect(user).toEqual({
       id: 'u-1',
       ...profile,
+      province,
+      city,
       status: 'INACTIVE',
       createdAt,
     });
     expect(user).not.toHaveProperty('passwordHash');
+    expect(user).not.toHaveProperty('provinceId');
     expect(prisma.user.create).toHaveBeenCalledWith({
       data: input,
-      select: {
-        id: true,
-        firstName: true,
-        lastName: true,
-        email: true,
-        phone: true,
-        status: true,
-        createdAt: true,
-      },
+      select: SELECT,
     });
   });
 
@@ -109,6 +132,49 @@ describe('UsersService', () => {
     });
   });
 
+  /** A P2003 shaped like the pg driver adapter's (seen on the real database). */
+  const foreignKeyViolation = (constraint: string) =>
+    new Prisma.PrismaClientKnownRequestError(
+      'Foreign key constraint violated',
+      {
+        code: 'P2003',
+        clientVersion: 'test',
+        meta: {
+          modelName: 'User',
+          driverAdapterError: {
+            name: 'DriverAdapterError',
+            cause: {
+              originalCode: '23503',
+              kind: 'ForeignKeyConstraintViolation',
+              constraint: { index: constraint },
+            },
+          },
+        },
+      },
+    );
+
+  it('rethrows a foreign key violation on another constraint untouched', async () => {
+    const error = foreignKeyViolation('users_other_id_fkey');
+    prisma.user.create.mockRejectedValue(error);
+
+    await expect(service.create(input)).rejects.toBe(error);
+  });
+
+  it('answers 400 PROVINCE_NOT_FOUND when the province does not exist', async () => {
+    prisma.user.create.mockRejectedValue(
+      foreignKeyViolation('users_province_id_fkey'),
+    );
+
+    const err = await service.create(input).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BadRequestException);
+    expect((err as BadRequestException).getResponse()).toEqual({
+      statusCode: 400,
+      code: 'PROVINCE_NOT_FOUND',
+      message: 'Province not found',
+    });
+    expect(prisma.user.findFirst).not.toHaveBeenCalled();
+  });
+
   it('rethrows any other database error untouched', async () => {
     const error = new Error('connection lost');
     prisma.user.create.mockRejectedValue(error);
@@ -125,21 +191,12 @@ describe('UsersService', () => {
     });
   });
 
-  const SELECT = {
-    id: true,
-    firstName: true,
-    lastName: true,
-    email: true,
-    phone: true,
-    status: true,
-    createdAt: true,
-  };
-
   it('finds a user by email without the password hash', async () => {
     const createdAt = new Date();
     prisma.user.findUnique.mockResolvedValue({
       id: 'u-1',
       ...input,
+      province,
       status: 'INACTIVE',
       createdAt,
     });
@@ -149,6 +206,8 @@ describe('UsersService', () => {
     expect(user).toEqual({
       id: 'u-1',
       ...profile,
+      province,
+      city,
       status: 'INACTIVE',
       createdAt,
     });
@@ -168,6 +227,8 @@ describe('UsersService', () => {
     prisma.user.findUnique.mockResolvedValue({
       id: 'u-1',
       ...profile,
+      city,
+      province,
       status: 'ACTIVE',
       createdAt,
     });
@@ -175,6 +236,8 @@ describe('UsersService', () => {
     await expect(service.findById('u-1')).resolves.toEqual({
       id: 'u-1',
       ...profile,
+      province,
+      city,
       status: 'ACTIVE',
       createdAt,
     });
@@ -200,6 +263,8 @@ describe('UsersService', () => {
     prisma.user.update.mockResolvedValue({
       id: 'u-1',
       ...profile,
+      city,
+      province,
       status: 'ACTIVE',
       createdAt: new Date(),
     });

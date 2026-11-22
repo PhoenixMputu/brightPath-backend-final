@@ -79,7 +79,10 @@ export class AuthController {
       'Creates the user as INACTIVE and emails a 6-digit verification code, valid for 10 minutes.',
   })
   @ApiCreatedResponse({ type: RegisterResponseDto })
-  @ApiBadRequestResponse({ description: 'Invalid request body.' })
+  @ApiBadRequestResponse({
+    description:
+      'Invalid request body (`code` VALIDATION_FAILED), or the province does not exist (`code` PROVINCE_NOT_FOUND).',
+  })
   @ApiConflictResponse({
     description:
       'Email or phone already in use. `code` is EMAIL_ALREADY_IN_USE, PHONE_ALREADY_IN_USE or USER_ALREADY_EXISTS.',

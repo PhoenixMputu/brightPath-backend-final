@@ -6,6 +6,7 @@ import {
   IsPhoneNumber,
   IsString,
   IsStrongPassword,
+  IsUUID,
   Matches,
   MaxLength,
 } from 'class-validator';
@@ -62,6 +63,26 @@ export class RegisterDto {
   })
   @IsPhoneNumber(undefined, { message: 'phone must be a valid phone number' })
   readonly phone: string;
+
+  @ApiProperty({
+    format: 'uuid',
+    example: '019a6b1c-2d3e-7f40-8a51-6b7c8d9e0f12',
+    description: 'Id of a province, as listed by GET /provinces.',
+  })
+  @IsUUID('all')
+  readonly provinceId: string;
+
+  @ApiProperty({
+    example: 'Lubumbashi',
+    minLength: 1,
+    maxLength: 100,
+    description: 'Free text, trimmed.',
+  })
+  @Transform(trim)
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  readonly city: string;
 
   @ApiProperty({
     format: 'password',

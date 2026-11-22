@@ -10,8 +10,9 @@ datasource db {
 }
 
 model Province {
-  id   String @id @default(uuid(7)) @db.Uuid
-  name String
+  id    String @id @default(uuid(7)) @db.Uuid
+  name  String
+  users User[]
 
   @@map("province")
 }
@@ -34,9 +35,15 @@ model User {
   phone        String     @unique
   /// argon2id hash. Never selected outside authentication code.
   passwordHash String     @map("password_hash")
+  /// Province the user lives in. A province with users cannot be deleted.
+  provinceId   String     @map("province_id") @db.Uuid
+  province     Province   @relation(fields: [provinceId], references: [id], onDelete: Restrict)
+  /// Free text, entered by the user.
+  city         String
   status       UserStatus @default(INACTIVE)
   createdAt    DateTime   @default(now()) @map("created_at")
   updatedAt    DateTime   @updatedAt @map("updated_at")
 
+  @@index([provinceId])
   @@map("users")
 }
