@@ -25,6 +25,36 @@ export class EmailDeliveryError extends Error {
   }
 }
 
+/**
+ * Resend refused the recipient address itself (e.g. a reserved domain such as
+ * example.com). Retrying with the same address can never work, unlike the
+ * other delivery errors.
+ */
+export class EmailRecipientRejectedError extends EmailDeliveryError {
+  constructor(reason: string) {
+    super(reason);
+    this.name = 'EmailRecipientRejectedError';
+  }
+}
+
+/**
+ * Resend has no dedicated error code for a refused recipient: it answers 422
+ * validation_error with a message about the `to` field. Anything else (a
+ * sandbox or domain restriction, a bad sender) is a configuration problem and
+ * stays a plain EmailDeliveryError.
+ */
+function isRecipientRejection(error: {
+  name: string;
+  statusCode: number | null;
+  message: string;
+}): boolean {
+  return (
+    error.name === 'validation_error' &&
+    error.statusCode === 422 &&
+    error.message.includes('`to`')
+  );
+}
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
@@ -60,12 +90,19 @@ export class EmailService {
     }
 
     if (result.error) {
+      const recipientRejected = isRecipientRejection(result.error);
       // Only the error name and status: the message may quote the recipient.
       this.logger.warn(
-        { reason: result.error.name, statusCode: result.error.statusCode },
+        {
+          reason: result.error.name,
+          statusCode: result.error.statusCode,
+          recipientRejected,
+        },
         'Resend rejected the email',
       );
-      throw new EmailDeliveryError(result.error.name);
+      throw recipientRejected
+        ? new EmailRecipientRejectedError(result.error.name)
+        : new EmailDeliveryError(result.error.name);
     }
     return result.data.id;
   }

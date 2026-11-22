@@ -10,7 +10,10 @@ import {
 import { randomUUID } from 'node:crypto';
 import { UserStatus } from '../../generated/prisma/enums.js';
 import { errorSummary } from '../../common/utils/error-summary.js';
-import { EmailService } from '../../integrations/resend/email.service.js';
+import {
+  EmailRecipientRejectedError,
+  EmailService,
+} from '../../integrations/resend/email.service.js';
 import { UserDto } from '../users/dto/user.dto.js';
 import { UsersService } from '../users/users.service.js';
 import { RegisterDto } from './dto/register.dto.js';
@@ -63,7 +66,11 @@ export class AuthService {
       await this.sendCode(user, `registration-otp/${user.id}`);
     } catch (err) {
       await this.rollBack(user.id, err);
-      throw emailNotSent();
+      // A refused address will never work: ask for another one instead of a
+      // retry.
+      throw err instanceof EmailRecipientRejectedError
+        ? emailUndeliverable()
+        : emailNotSent();
     }
     return user;
   }
@@ -290,6 +297,14 @@ function sessionNotOpened(): ServiceUnavailableException {
     statusCode: 503,
     code: 'SESSION_NOT_OPENED',
     message: 'Could not sign you in, please request a new verification code',
+  });
+}
+
+function emailUndeliverable(): BadRequestException {
+  return new BadRequestException({
+    statusCode: 400,
+    code: 'EMAIL_UNDELIVERABLE',
+    message: 'This email address cannot receive emails, use another one',
   });
 }
 

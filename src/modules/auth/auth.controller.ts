@@ -81,7 +81,7 @@ export class AuthController {
   @ApiCreatedResponse({ type: RegisterResponseDto })
   @ApiBadRequestResponse({
     description:
-      'Invalid request body (`code` VALIDATION_FAILED), or the province does not exist (`code` PROVINCE_NOT_FOUND).',
+      'Invalid request body (`code` VALIDATION_FAILED), the province does not exist (`code` PROVINCE_NOT_FOUND), or the email provider refuses the address, e.g. a reserved domain such as example.com (`code` EMAIL_UNDELIVERABLE). The user is not created.',
   })
   @ApiConflictResponse({
     description:
