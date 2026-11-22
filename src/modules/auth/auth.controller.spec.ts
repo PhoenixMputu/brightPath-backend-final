@@ -1,9 +1,11 @@
 import {
   BadRequestException,
   ConflictException,
+  type ExecutionContext,
   HttpException,
   INestApplication,
   ServiceUnavailableException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
@@ -11,12 +13,14 @@ import request from 'supertest';
 import { configureApp } from '../../app.setup.js';
 import {
   AuthController,
+  REFRESH_SUCCESS_MESSAGE,
   REGISTER_SUCCESS_MESSAGE,
   RESEND_CODE_MESSAGE,
   VERIFY_EMAIL_SUCCESS_MESSAGE,
 } from './auth.controller.js';
 import { AuthCookiesInterceptor } from './auth-cookies.interceptor.js';
 import { AuthService } from './auth.service.js';
+import { JwtRefreshGuard } from './guards/jwt-refresh.guard.js';
 
 describe('AuthController', () => {
   let app: INestApplication;
@@ -24,6 +28,20 @@ describe('AuthController', () => {
     register: vi.fn(),
     verifyEmail: vi.fn(),
     resendVerificationCode: vi.fn(),
+    refresh: vi.fn(),
+  };
+  const refreshSession = {
+    userId: 'u-1',
+    sessionId: 's-1',
+    refreshToken: 'old.refresh.jwt',
+  };
+  /** Stands in for the refresh strategy, covered in jwt-refresh.guard.spec.ts. */
+  const refreshGuard = {
+    canActivate: (context: ExecutionContext) => {
+      context.switchToHttp().getRequest<{ user: unknown }>().user =
+        refreshSession;
+      return true;
+    },
   };
 
   const profile = {
@@ -43,7 +61,10 @@ describe('AuthController', () => {
         AuthCookiesInterceptor,
         { provide: ConfigService, useValue: { get: () => undefined } },
       ],
-    }).compile();
+    })
+      .overrideGuard(JwtRefreshGuard)
+      .useValue(refreshGuard)
+      .compile();
     app = configureApp(moduleRef.createNestApplication());
     await app.init();
   });
@@ -285,6 +306,53 @@ describe('AuthController', () => {
       );
 
       await resend({ email: profile.email }).expect(429).expect(body);
+    });
+  });
+
+  describe('POST /auth/refresh', () => {
+    const refresh = () =>
+      request(app.getHttpServer()).post('/api/v1/auth/refresh');
+    const tokens = {
+      sessionId: 's-1',
+      accessToken: 'new.access.jwt',
+      refreshToken: 'new.refresh.jwt',
+      accessTtlSeconds: 900,
+      refreshTtlSeconds: 604_800,
+    };
+
+    it('rotates the session behind the refresh cookie and sets the new cookies', async () => {
+      authService.refresh.mockResolvedValue(tokens);
+
+      const res = await refresh()
+        .expect(200)
+        .expect({ message: REFRESH_SUCCESS_MESSAGE });
+
+      expect(authService.refresh).toHaveBeenCalledWith(refreshSession);
+      const cookies = ([] as string[]).concat(res.headers['set-cookie'] ?? []);
+      expect(cookies).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/^access_token=new\.access\.jwt; .*HttpOnly/),
+          expect.stringMatching(
+            /^refresh_token=new\.refresh\.jwt; .*Path=\/api\/v1\/auth; .*HttpOnly/,
+          ),
+        ]),
+      );
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.text).not.toContain(tokens.refreshToken);
+    });
+
+    it('sets no cookie when the service refuses the refresh', async () => {
+      authService.refresh.mockRejectedValue(
+        new UnauthorizedException({
+          statusCode: 401,
+          code: 'REFRESH_TOKEN_INVALID',
+          message: 'Session expired, please sign in again',
+        }),
+      );
+
+      const res = await refresh().expect(401);
+      expect(res.body.code).toBe('REFRESH_TOKEN_INVALID');
+      expect(res.headers['set-cookie']).toBeUndefined();
     });
   });
 });

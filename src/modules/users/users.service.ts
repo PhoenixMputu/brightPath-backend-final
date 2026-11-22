@@ -104,6 +104,15 @@ export class UsersService {
     return toUserDto(user);
   }
 
+  /** False when the user does not exist or is not ACTIVE. */
+  async isActive(id: string): Promise<boolean> {
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: { status: true },
+    });
+    return user?.status === UserStatus.ACTIVE;
+  }
+
   async activate(id: string): Promise<UserDto> {
     const user = await this.prisma.user.update({
       where: { id },

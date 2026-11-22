@@ -31,6 +31,8 @@ const { EmailService } =
   await import('../src/integrations/resend/email.service.js');
 const { JwtService } = await import('@nestjs/jwt');
 const { setupSwagger } = await import('../src/swagger.js');
+const { ROTATE_SESSION_SCRIPT } =
+  await import('../src/modules/auth/token.service.js');
 
 interface Province {
   id: string;
@@ -90,9 +92,27 @@ function fakeRedis() {
     del: vi.fn((...keys: string[]) =>
       Promise.resolve(keys.filter((key) => store.delete(key)).length),
     ),
-    // Throttler script: [totalHits, ttlMs, isBlocked, blockTtlMs].
-    eval: vi.fn((_script: string, _n: number, hitsKey: string) =>
-      Promise.resolve([incr(hitsKey), 60_000, 0, 0]),
+    eval: vi.fn(
+      (script: string, _n: number, key: string, ...args: unknown[]) => {
+        if (script === ROTATE_SESSION_SCRIPT) {
+          // Same compare-and-set as the Lua script.
+          const [userId, hash, next] = args as [string, string, string];
+          const current = store.get(key);
+          if (current === undefined) return Promise.resolve(0);
+          const session = JSON.parse(current) as {
+            userId: string;
+            refreshTokenHash: string;
+          };
+          if (session.userId !== userId || session.refreshTokenHash !== hash) {
+            store.delete(key);
+            return Promise.resolve(-1);
+          }
+          store.set(key, next);
+          return Promise.resolve(1);
+        }
+        // Throttler script: [totalHits, ttlMs, isBlocked, blockTtlMs].
+        return Promise.resolve([incr(key), 60_000, 0, 0]);
+      },
     ),
     multi: vi.fn(() => {
       const ops: Array<() => unknown> = [];
@@ -428,6 +448,93 @@ describe('Email verification (e2e)', () => {
       .set('Cookie', `access_token=${refresh.value}`)
       .expect(401);
     expect(swapped.body.code).toBe('UNAUTHENTICATED');
+  });
+
+  /** Registers and verifies the profile; returns its cookies and session id. */
+  const signUp = async () => {
+    await post('register', profile).expect(201);
+    const res = await post('verify-email', {
+      email: profile.email,
+      code: lastCode(),
+    }).expect(200);
+    const { access_token: access, refresh_token: refresh } = cookiesOf(res);
+    const { sid } = await new JwtService({}).verifyAsync<{ sid: string }>(
+      access.value,
+      { secret: process.env.JWT_ACCESS_SECRET },
+    );
+    return { access: access.value, refresh: refresh.value, sid };
+  };
+
+  const refreshWith = (refreshToken?: string) => {
+    const req = request(app.getHttpServer()).post('/api/v1/auth/refresh');
+    return refreshToken
+      ? req.set('Cookie', `refresh_token=${refreshToken}`)
+      : req;
+  };
+
+  it('rotates the refresh token and revokes the session when an old one is reused', async () => {
+    const first = await signUp();
+    const sessionKey = `brightpath:auth:session:${first.sid}`;
+
+    const res = await refreshWith(first.refresh).expect(200);
+    expect(res.body).toEqual({ message: 'Session refreshed successfully.' });
+    expect(res.headers['cache-control']).toBe('no-store');
+    const { access_token: access, refresh_token: refresh } = cookiesOf(res);
+    expect(refresh.attributes).toEqual(
+      expect.arrayContaining(['Path=/api/v1/auth', 'HttpOnly', 'Secure']),
+    );
+    expect(refresh.value).not.toBe(first.refresh);
+    expect(res.text).not.toContain(refresh.value);
+
+    // Same session, new tokens; the new access token works.
+    const claims = await new JwtService({}).verifyAsync<{ sid: string }>(
+      access.value,
+      { secret: process.env.JWT_ACCESS_SECRET },
+    );
+    expect(claims.sid).toBe(first.sid);
+    await request(app.getHttpServer())
+      .get('/api/v1/users/me')
+      .set('Cookie', `access_token=${access.value}`)
+      .expect(200);
+
+    // The rotated token is still usable once more...
+    const second = cookiesOf(await refreshWith(refresh.value).expect(200));
+    expect(redis.store.has(sessionKey)).toBe(true);
+
+    // ...but replaying an old one kills the whole session.
+    const replay = await refreshWith(first.refresh).expect(401);
+    expect(replay.body).toEqual({
+      statusCode: 401,
+      code: 'REFRESH_TOKEN_INVALID',
+      message: 'Session expired, please sign in again',
+    });
+    expect(replay.headers['set-cookie']).toBeUndefined();
+    expect(redis.store.has(sessionKey)).toBe(false);
+
+    // Including for whoever holds the latest token.
+    const latest = await refreshWith(second.refresh_token.value).expect(401);
+    expect(latest.body.code).toBe('REFRESH_TOKEN_INVALID');
+  });
+
+  it('refuses to refresh without the refresh cookie or with the access token', async () => {
+    const { access } = await signUp();
+
+    expect((await refreshWith().expect(401)).body.code).toBe(
+      'REFRESH_TOKEN_INVALID',
+    );
+    expect((await refreshWith(access).expect(401)).body.code).toBe(
+      'REFRESH_TOKEN_INVALID',
+    );
+  });
+
+  it('refuses to refresh once the account is no longer active, and revokes the session', async () => {
+    const { refresh, sid } = await signUp();
+    users.rows[0].status = 'INACTIVE';
+
+    expect((await refreshWith(refresh).expect(401)).body.code).toBe(
+      'REFRESH_TOKEN_INVALID',
+    );
+    expect(redis.store.has(`brightpath:auth:session:${sid}`)).toBe(false);
   });
 
   it('GET /api/v1/users/me answers 401 without the access cookie', async () => {

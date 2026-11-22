@@ -8,6 +8,8 @@ import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { OtpService } from './otp.service.js';
 import { PasswordService } from './password.service.js';
+import { JwtRefreshGuard } from './guards/jwt-refresh.guard.js';
+import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy.js';
 import { JwtStrategy } from './strategies/jwt.strategy.js';
 import { TokenService } from './token.service.js';
 
@@ -29,6 +31,8 @@ import { TokenService } from './token.service.js';
     TokenService,
     AuthCookiesInterceptor,
     JwtStrategy,
+    JwtRefreshStrategy,
+    JwtRefreshGuard,
   ],
 })
 export class AuthModule {}
