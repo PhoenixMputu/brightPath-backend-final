@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import {
   EmailDeliveryError,
+  EmailRecipientRejectedError,
   EmailService,
 } from '../../integrations/resend/email.service.js';
 import { UsersService } from '../users/users.service.js';
@@ -136,6 +137,22 @@ describe('AuthService', () => {
       statusCode: 503,
       code: 'VERIFICATION_EMAIL_NOT_SENT',
       message: 'Verification email could not be sent, please try again',
+    });
+    expect(otpService.revoke).toHaveBeenCalledWith('u-1');
+    expect(usersService.delete).toHaveBeenCalledWith('u-1');
+  });
+
+  it('deletes the user and answers 400 EMAIL_UNDELIVERABLE when the address is refused', async () => {
+    emailService.send.mockRejectedValue(
+      new EmailRecipientRejectedError('validation_error'),
+    );
+
+    const err = await service.register(dto).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BadRequestException);
+    expect((err as BadRequestException).getResponse()).toEqual({
+      statusCode: 400,
+      code: 'EMAIL_UNDELIVERABLE',
+      message: 'This email address cannot receive emails, use another one',
     });
     expect(otpService.revoke).toHaveBeenCalledWith('u-1');
     expect(usersService.delete).toHaveBeenCalledWith('u-1');

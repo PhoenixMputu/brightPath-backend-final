@@ -27,7 +27,7 @@ const { AppModule } = await import('../src/app.module.js');
 const { configureApp } = await import('../src/app.setup.js');
 const { PrismaService } = await import('../src/prisma/prisma.service.js');
 const { REDIS_CLIENT } = await import('../src/redis/redis.constants.js');
-const { EmailService } =
+const { EmailService, EmailRecipientRejectedError } =
   await import('../src/integrations/resend/email.service.js');
 const { JwtService } = await import('@nestjs/jwt');
 const { Prisma } = await import('../src/generated/prisma/client.js');
@@ -514,6 +514,24 @@ describe('Email verification (e2e)', () => {
       ? req.set('Cookie', `refresh_token=${refreshToken}`)
       : req;
   };
+
+  it('answers 400 EMAIL_UNDELIVERABLE and keeps no user when the address is refused', async () => {
+    const send = app.get(EmailService).send as ReturnType<typeof vi.fn>;
+    send.mockRejectedValueOnce(
+      new EmailRecipientRejectedError('validation_error'),
+    );
+
+    const res = await post('register', profile).expect(400);
+
+    expect(res.body).toEqual({
+      statusCode: 400,
+      code: 'EMAIL_UNDELIVERABLE',
+      message: 'This email address cannot receive emails, use another one',
+    });
+    expect(users.delete).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: users.rows[0].id } }),
+    );
+  });
 
   it('refuses to register with an unknown province, and sends no email', async () => {
     const res = await post('register', {
